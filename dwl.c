@@ -1153,6 +1153,7 @@ void move() {
     return;
 
   cursor_mode = CurMove;
+  focusclient(grabc, 1);
   grabcx = cursor->x - grabc->geom.x;
   grabcy = cursor->y - grabc->geom.y;
 }
@@ -1334,10 +1335,6 @@ void setmode(struct wlr_output *output, int w, int h, int refresh) {
 }
 
 void setmon(Client *c, Monitor *m, unsigned int newtags) {
-  if (c->mon == m) {
-    return;
-  }
-
   Monitor *oldmon = c->mon;
 
   c->mon = m;
