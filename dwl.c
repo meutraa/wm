@@ -554,18 +554,12 @@ void axisnotify(struct wl_listener *listener, void *data) {
 
 void buttonpress(struct wl_listener *listener, void *data) {
   struct wlr_event_pointer_button *event = data;
-  struct wlr_keyboard *keyboard;
-  uint32_t mods;
 
   switch (event->state) {
   case WLR_BUTTON_PRESSED:;
-    keyboard = wlr_seat_get_keyboard(seat);
-    mods = wlr_keyboard_get_modifiers(keyboard);
-    if (mods == WLR_MODIFIER_LOGO) {
-      if (event->button == BTN_LEFT) {
-        move();
-        return;
-      }
+    if (event->button == BTN_SIDE) {
+      move();
+      return;
     }
     break;
   case WLR_BUTTON_RELEASED:
@@ -1597,8 +1591,7 @@ Monitor *xytomon(double x, double y) {
 }
 
 void zoom() {
-  Client *sel = selclient();
-  if (sel) {
+  onselected() {
     wl_list_remove(&sel->link);
     wl_list_insert(&clients, &sel->link);
     focusclient(sel, 1);
