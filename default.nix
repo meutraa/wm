@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> { } }:
 let
-  enableXWayland = false;
+  enableXWayland = true;
   version = "dc61f471da1a1c9264167635c286b6dcb37b3d6f";
   sha256 = "0k31chpc4facn7n7kmk0s5wp7vj7mpapwk4as6pjhi1rq37g34lf";
 
