@@ -1,7 +1,3 @@
-/*
- * See LICENSE file for copyright and license details.
- */
-
 #define _XOPEN_SOURCE 700
 #include <getopt.h>
 #include <libinput.h>
@@ -53,7 +49,6 @@
 #define EBARF(fmt, ...) BARF(fmt ": %s", ##__VA_ARGS__, strerror(errno))
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
-#define CLEANMASK(mask) (mask & ~WLR_MODIFIER_CAPS)
 #define VISIBLEON(C, M)                                                        \
   ((C)->mon == (M) && ((C)->tags & (M)->tagset[(M)->seltags]))
 #define LENGTH(X) (sizeof X / sizeof X[0])
@@ -293,20 +288,13 @@ static struct wlr_xwayland *xwayland;
 static Atom netatom[NetLast];
 #endif
 
-/* tagging */
 static const char *tags[] = {"i", "e", "o", "n"};
 
-/* monitors
- * The order in which monitors are defined determines their position.
- * Non-configured monitors are always added to the left. */
 static const MonitorRule monrules[] = {
     {"DP-3", 0, 0, 1920, 1080, 239760},
     {"DP-2", 1920, 0, 0, 0, 0},
     {"DP-1", 3840, 0, 1920, 1080, 60000},
 };
-
-static const int repeat_rate = 25;
-static const int repeat_delay = 220;
 
 #define CASE(A, B)                                                             \
   case A:                                                                      \
@@ -316,7 +304,6 @@ static const int repeat_delay = 220;
 #include "client.h"
 
 void applybounds(Client *c, struct wlr_box *bbox) {
-  /* set minimum possible */
   c->geom.width = MAX(1, c->geom.width);
   c->geom.height = MAX(1, c->geom.height);
 
@@ -560,16 +547,17 @@ void buttonpress(struct wl_listener *listener, void *data) {
     if (mods == WLR_MODIFIER_LOGO) {
       if (event->button == BTN_LEFT) {
         move();
+        return;
       } else if (event->button == BTN_MIDDLE) {
         togglefloating();
+        return;
       } else if (event->button == BTN_RIGHT) {
         resize();
+        return;
       }
     }
     break;
   case WLR_BUTTON_RELEASED:
-    /* If you released any buttons, we exit interactive move/resize mode. */
-    /* TODO should reset to the pointer focus's current setcursor */
     if (cursor_mode != CurNormal) {
       cursor_mode = CurNormal;
       /* Drop the window off on its new monitor */
@@ -684,7 +672,7 @@ void createkeyboard(struct wlr_input_device *device) {
   wlr_keyboard_set_keymap(device->keyboard, keymap);
   xkb_keymap_unref(keymap);
   xkb_context_unref(context);
-  wlr_keyboard_set_repeat_info(device->keyboard, repeat_rate, repeat_delay);
+  wlr_keyboard_set_repeat_info(device->keyboard, 25, 220);
 
   /* Here we set up listeners for keyboard events. */
   LISTEN(&device->keyboard->events.modifiers, &kb->modifiers, keypressmod);
@@ -1349,11 +1337,6 @@ void rendermon(struct wl_listener *listener, void *data) {
 }
 
 void setsize(Client *c, int x, int y, int w, int h, int interact) {
-  /*
-   * Note that I took some shortcuts here. In a more fleshed-out
-   * compositor, you'd wait for the client to prepare a buffer at
-   * the new size, then commit any movement that was prepared.
-   */
   struct wlr_box *bbox = interact ? &sgeom : &c->mon->w;
   c->geom.x = x;
   c->geom.y = y;
@@ -1381,10 +1364,6 @@ void run() {
 
   setenv("WAYLAND_DISPLAY", socket, 1);
 
-  /* Run the Wayland event loop. This does not return until you exit the
-   * compositor. Starting the backend rigged up all of the necessary event
-   * loop configuration to listen to libinput events, DRM events, generate
-   * frame events at the refresh rate, and so on. */
   wl_display_run(dpy);
 }
 
