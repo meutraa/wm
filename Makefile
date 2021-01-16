@@ -1,6 +1,6 @@
-CFLAGS ?= -O3 -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
+CFLAGS ?= -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-variable
 
-CFLAGS += -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
+CFLAGS += -g -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
 
 WAYLAND_PROTOCOLS=$(shell pkg-config --variable=pkgdatadir wayland-protocols)
 WAYLAND_SCANNER=$(shell pkg-config --variable=wayland_scanner wayland-scanner)
