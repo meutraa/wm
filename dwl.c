@@ -1,13 +1,8 @@
 #define _XOPEN_SOURCE 700
 #include <X11/Xlib.h>
-#include <getopt.h>
 #include <libinput.h>
 #include <linux/input-event-codes.h>
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -22,7 +17,6 @@
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
-#include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
@@ -36,8 +30,7 @@
 #include <wlr/xwayland.h>
 #include <xkbcommon/xkbcommon.h>
 
-enum { CurNormal, CurMove };                 /* cursor */
-enum { XDGShell, X11Managed, X11Unmanaged }; /* client types */
+enum { XDGShell, X11Managed, X11Unmanaged };
 
 typedef struct Monitor Monitor;
 typedef struct {
@@ -52,13 +45,13 @@ typedef struct {
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener destroy;
-  struct wlr_box geom; /* layout-relative, includes border */
+  struct wl_listener activate;  // xwayland only
+  struct wl_listener configure; // xwayland only
+  struct wlr_box geom;          // layout-relative
   Monitor *mon;
   unsigned int type;
-  struct wl_listener activate;
-  struct wl_listener configure;
   unsigned int tags;
-  uint32_t resize; /* configure serial of a pending resize */
+  uint32_t resize; // configure serial of a pending resize
 } Client;
 
 typedef struct {
@@ -84,37 +77,33 @@ struct Monitor {
 
 typedef struct {
   const char *name;
-  int x;
-  int y;
-  int w;
-  int h;
+  int x, y, w, h;
   int refresh;
 } MonitorRule;
 
 struct render_data {
   struct wlr_output *output;
   struct timespec *when;
-  int x, y; /* layout-relative */
+  int x, y; // layout-relative
+  int focused;
 };
 
 static struct wlr_renderer *renderer;
 
 static struct wlr_xdg_shell *xdg_shell;
 
-static struct wl_list clients; /* tiling order */
-static struct wl_list fstack;  /* focus order */
-static struct wl_list stack;   /* stacking z-order */
+static struct wl_list clients; // tiling order
+static struct wl_list fstack;  // focus order
+static struct wl_list stack;   // stacking z-order
 static struct wl_list independents;
-static struct wl_list keyboards;
 static struct wl_list mons;
 
-static struct wlr_output_manager_v1 *output_mgr;
 static struct wlr_xwayland *xwayland;
 
 static struct wlr_cursor *cursor;
 
 static struct wlr_seat *seat;
-static unsigned int cursor_mode;
+static unsigned int dragging;
 static Client *grabc;
 static int grabcx, grabcy;
 
@@ -144,23 +133,21 @@ static const MonitorRule monrules[] = {
 };
 
 Client *xytoclient(double x, double y) {
-  log("%s", "xytoclient");
   Client *c;
   wl_list_for_each(c, &stack, slink) {
-    if (VISIBLEON(c, c->mon) && wlr_box_contains_point(&c->geom, x, y))
+    if (VISIBLEON(c, c->mon) && wlr_box_contains_point(&c->geom, x, y)) {
       return c;
+    }
   }
   return NULL;
 }
 
 Monitor *xytomon(double x, double y) {
-  log("%s", "xytomon");
   struct wlr_output *o = wlr_output_layout_output_at(output_layout, x, y);
   return o ? o->data : NULL;
 }
 
 Client *xytoindependent(double x, double y) {
-  log("%s", "xytoindependent");
   Client *c;
   wl_list_for_each_reverse(c, &independents, link) {
     struct wlr_box geom = {
@@ -169,8 +156,9 @@ Client *xytoindependent(double x, double y) {
         .width = c->surface.xwayland->width,
         .height = c->surface.xwayland->height,
     };
-    if (wlr_box_contains_point(&geom, x, y))
+    if (wlr_box_contains_point(&geom, x, y)) {
       return c;
+    }
   }
   return NULL;
 }
@@ -201,9 +189,8 @@ client_for_each_surface(Client *c, wlr_surface_iterator_func_t fn, void *data) {
 }
 
 static inline const char *client_get_appid(Client *c) {
-  if (client_is_x11(c))
-    return c->surface.xwayland->class;
-  return c->surface.xdg->toplevel->app_id;
+  return client_is_x11(c) ? c->surface.xwayland->class
+                          : c->surface.xdg->toplevel->app_id;
 }
 
 static inline void client_get_geometry(Client *c, struct wlr_box *geom) {
@@ -218,9 +205,8 @@ static inline void client_get_geometry(Client *c, struct wlr_box *geom) {
 }
 
 static inline const char *client_get_title(Client *c) {
-  if (client_is_x11(c))
-    return c->surface.xwayland->title;
-  return c->surface.xdg->toplevel->title;
+  return client_is_x11(c) ? c->surface.xwayland->title
+                          : c->surface.xdg->toplevel->title;
 }
 
 static inline int client_is_unmanaged(Client *c) {
@@ -238,10 +224,8 @@ static inline uint32_t client_set_size(Client *c, uint32_t width,
 }
 
 static inline struct wlr_surface *client_surface(Client *c) {
-  if (client_is_x11(c)) {
-    return c->surface.xwayland->surface;
-  }
-  return c->surface.xdg->surface;
+  return client_is_x11(c) ? c->surface.xwayland->surface
+                          : c->surface.xdg->surface;
 }
 
 #define CAT(x, y) CAT_(x, y)
@@ -260,10 +244,10 @@ static inline void llisten(struct wl_signal *sig, struct wl_listener *l,
 
 static inline struct wlr_surface *
 client_surface_at(Client *c, double cx, double cy, double *sx, double *sy) {
-  if (client_is_x11(c)) {
-    return wlr_surface_surface_at(c->surface.xwayland->surface, cx, cy, sx, sy);
-  }
-  return wlr_xdg_surface_surface_at(c->surface.xdg, cx, cy, sx, sy);
+  return client_is_x11(c)
+             ? wlr_surface_surface_at(c->surface.xwayland->surface, cx, cy, sx,
+                                      sy)
+             : wlr_xdg_surface_surface_at(c->surface.xdg, cx, cy, sx, sy);
 }
 
 Client *focustop(Monitor *m) {
@@ -284,14 +268,18 @@ void applybounds(Client *c, struct wlr_box *bbox) {
   c->geom.width = MAX(1, c->geom.width);
   c->geom.height = MAX(1, c->geom.height);
 
-  if (c->geom.x >= bbox->x + bbox->width)
+  if (c->geom.x >= bbox->x + bbox->width) {
     c->geom.x = bbox->x + bbox->width - c->geom.width;
-  if (c->geom.y >= bbox->y + bbox->height)
+  }
+  if (c->geom.y >= bbox->y + bbox->height) {
     c->geom.y = bbox->y + bbox->height - c->geom.height;
-  if (c->geom.x + c->geom.width <= bbox->x)
+  }
+  if (c->geom.x + c->geom.width <= bbox->x) {
     c->geom.x = bbox->x;
-  if (c->geom.y + c->geom.height <= bbox->y)
+  }
+  if (c->geom.y + c->geom.height <= bbox->y) {
     c->geom.y = bbox->y;
+  }
 }
 
 void setsize(Client *c, int x, int y, int w, int h, int interact) {
@@ -308,16 +296,29 @@ void arrange(Monitor *m) {
   unsigned int i, n = 0, h, mw, my, ty, nmaster = 1;
   Client *c;
 
-  wl_list_for_each(c, &clients, link) if (VISIBLEON(c, m)) n++;
-  if (n == 0)
-    return;
+  wl_list_for_each(c, &clients, link) {
+    if (VISIBLEON(c, m) && (0 != strcmp(client_get_appid(c), "floating"))) {
+      n++;
+    }
+  }
+
+  log("%d windows", n);
 
   mw = n > nmaster ? nmaster ? m->w.width * 0.5 : 0 : m->w.width;
   i = my = ty = 0;
   wl_list_for_each(c, &clients, link) {
-    if (!VISIBLEON(c, m))
+    if (!VISIBLEON(c, m)) {
+      log("%s", "not visible");
       continue;
-    else if (i < nmaster) {
+    }
+
+    if (0 == strcmp(client_get_appid(c), "floating")) {
+      log("%s", "sizing floating window");
+      setsize(c, m->w.x + 640, 360, 640, 360, 0);
+      continue;
+    }
+
+    if (i < nmaster) {
       h = (m->w.height - my) / (MIN(n, nmaster) - i);
       setsize(c, m->w.x, m->w.y + my, mw, h, 0);
       my += c->geom.height;
@@ -337,8 +338,9 @@ void focusclient(Client *c, int lift) {
   }
 
   struct wlr_surface *old = seat->keyboard_state.focused_surface;
-  if (c && client_surface(c) == old)
+  if (c && client_surface(c) == old) {
     return;
+  }
 
   if (c) {
     wl_list_remove(&c->flink);
@@ -381,28 +383,15 @@ void setmon(Client *c, Monitor *m, unsigned int newtags) {
 }
 
 void updatemons() {
-  struct wlr_output_configuration_v1 *config =
-      wlr_output_configuration_v1_create();
-  Monitor *m;
   sgeom = *wlr_output_layout_get_box(output_layout, NULL);
+  Monitor *m;
   wl_list_for_each(m, &mons, link) {
-    struct wlr_output_configuration_head_v1 *config_head =
-        wlr_output_configuration_head_v1_create(config, m->wlr_output);
-
     m->m = m->w = *wlr_output_layout_get_box(output_layout, m->wlr_output);
     arrange(m);
-
-    config_head->state.enabled = m->wlr_output->enabled;
-    config_head->state.mode = m->wlr_output->current_mode;
-    config_head->state.x = m->m.x;
-    config_head->state.y = m->m.y;
   }
-
-  wlr_output_manager_v1_set_configuration(output_mgr, config);
 }
 
 void on_cursor_axis(struct wl_listener *listener, void *data) {
-  log("%s", "on_cursor_axis");
   struct wlr_event_pointer_axis *event = data;
   wlr_seat_pointer_notify_axis(seat, event->time_msec, event->orientation,
                                event->delta, event->delta_discrete,
@@ -410,20 +399,19 @@ void on_cursor_axis(struct wl_listener *listener, void *data) {
 }
 
 void on_cursor_button(struct wl_listener *listener, void *data) {
-  log("%s", "on_cursor_button");
   struct wlr_event_pointer_button *event = data;
 
   if (event->state == WLR_BUTTON_PRESSED && event->button == BTN_SIDE) {
     grabc = xytoclient(cursor->x, cursor->y);
     if (grabc) {
-      cursor_mode = CurMove;
+      dragging = 1;
       focusclient(grabc, 1);
       grabcx = cursor->x - grabc->geom.x;
       grabcy = cursor->y - grabc->geom.y;
     }
     return;
-  } else if (WLR_BUTTON_RELEASED == event->state && CurNormal != cursor_mode) {
-    cursor_mode = CurNormal;
+  } else if (WLR_BUTTON_RELEASED == event->state && dragging) {
+    dragging = 0;
     selmon = xytomon(cursor->x, cursor->y);
     setmon(grabc, selmon, 0);
     return;
@@ -451,8 +439,6 @@ void on_input_destroy(struct wl_listener *listener, void *data) {
   log("%s", "on_input_destroy");
   struct wlr_input_device *device = data;
   Keyboard *kb = device->data;
-
-  wl_list_remove(&kb->link);
   wl_list_remove(&kb->modifiers.link);
   wl_list_remove(&kb->key.link);
   wl_list_remove(&kb->destroy.link);
@@ -481,10 +467,9 @@ void on_output_destroy(struct wl_listener *listener, void *data) {
 }
 
 void on_xdg_surface_commit(struct wl_listener *listener, void *data) {
-  log("%s", "on_xdg_surface_commit");
   Client *c = wl_container_of(listener, c, commit);
-
   if (c->resize && c->resize <= c->surface.xdg->configure_serial) {
+    log("%s", "size reset");
     c->resize = 0;
   }
 }
@@ -498,13 +483,15 @@ void render(struct wlr_surface *surface, int sx, int sy, void *data) {
   if (texture) {
     wlr_output_layout_output_coords(output_layout, output, &ox, &oy);
     wlr_render_texture(renderer, texture, output->transform_matrix,
-                       ox + rdata->x + sx, oy + rdata->y + sy, 1);
+                       ox + rdata->x + sx, oy + rdata->y + sy,
+                       rdata->focused ? 1 : 0.75);
     wlr_surface_send_frame_done(surface, rdata->when);
   }
 }
 
 void renderclients(Monitor *m, struct timespec *now) {
-  Client *c;
+  Client *c, *sel = selclient();
+  ;
   double ox, oy;
   struct render_data rdata;
   wl_list_for_each_reverse(c, &stack, slink) {
@@ -520,12 +507,13 @@ void renderclients(Monitor *m, struct timespec *now) {
     rdata.when = now;
     rdata.x = c->geom.x;
     rdata.y = c->geom.y;
+    rdata.focused = c == sel;
     client_for_each_surface(c, render, &rdata);
   }
 }
 
 void renderindependents(struct wlr_output *output, struct timespec *now) {
-  Client *c;
+  Client *c, *sel = selclient();
   struct render_data rdata;
   struct wlr_box geom;
 
@@ -543,6 +531,7 @@ void renderindependents(struct wlr_output *output, struct timespec *now) {
     rdata.when = now;
     rdata.x = c->surface.xwayland->x;
     rdata.y = c->surface.xwayland->y;
+    rdata.focused = c == sel;
     wlr_surface_for_each_surface(c->surface.xwayland->surface, render, &rdata);
   }
 }
@@ -636,13 +625,11 @@ void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_surface_unmap");
   Client *c = wl_container_of(listener, c, unmap);
   wl_list_remove(&c->link);
-  if (client_is_unmanaged(c)) {
-    return;
+  if (!client_is_unmanaged(c)) {
+    setmon(c, NULL, 0);
+    wl_list_remove(&c->flink);
+    wl_list_remove(&c->slink);
   }
-
-  setmon(c, NULL, 0);
-  wl_list_remove(&c->flink);
-  wl_list_remove(&c->slink);
 }
 
 void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
@@ -651,10 +638,11 @@ void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
   wl_list_remove(&c->map.link);
   wl_list_remove(&c->unmap.link);
   wl_list_remove(&c->destroy.link);
-  if (c->type == X11Managed)
+  if (c->type == X11Managed) {
     wl_list_remove(&c->activate.link);
-  else if (c->type == XDGShell)
+  } else if (c->type == XDGShell) {
     wl_list_remove(&c->commit.link);
+  }
   free(c);
 }
 
@@ -663,24 +651,22 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
   struct wlr_xdg_surface *xdg_surface = data;
   Client *c;
 
-  if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-    return;
+  if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+    c = xdg_surface->data = calloc(1, sizeof(*c));
+    c->surface.xdg = xdg_surface;
+
+    // Tells the surface it is tiled
+    wlr_xdg_toplevel_set_tiled(c->surface.xdg, WLR_EDGE_TOP | WLR_EDGE_BOTTOM |
+                                                   WLR_EDGE_LEFT |
+                                                   WLR_EDGE_RIGHT);
+
+    // Do I even need commit?
+    llisten(&xdg_surface->surface->events.commit, &c->commit,
+            on_xdg_surface_commit);
+    llisten(&xdg_surface->events.map, &c->map, on_xdg_surface_map);
+    llisten(&xdg_surface->events.unmap, &c->unmap, on_xdg_surface_unmap);
+    llisten(&xdg_surface->events.destroy, &c->destroy, on_xdg_surface_destroy);
   }
-
-  c = xdg_surface->data = calloc(1, sizeof(*c));
-  c->surface.xdg = xdg_surface;
-
-  // TODO also why?
-  wlr_xdg_toplevel_set_tiled(c->surface.xdg, WLR_EDGE_TOP | WLR_EDGE_BOTTOM |
-                                                 WLR_EDGE_LEFT |
-                                                 WLR_EDGE_RIGHT);
-
-  // Do I even need commit?
-  llisten(&xdg_surface->surface->events.commit, &c->commit,
-          on_xdg_surface_commit);
-  llisten(&xdg_surface->events.map, &c->map, on_xdg_surface_map);
-  llisten(&xdg_surface->events.unmap, &c->unmap, on_xdg_surface_unmap);
-  llisten(&xdg_surface->events.destroy, &c->destroy, on_xdg_surface_destroy);
 }
 
 void on_cursor_frame(struct wl_listener *listener, void *data) {
@@ -689,18 +675,12 @@ void on_cursor_frame(struct wl_listener *listener, void *data) {
 
 Monitor *dirtomon(int dir) {
   Monitor *m;
-
-  if (dir > 0) {
-    if (selmon->link.next == &mons) {
-      return wl_container_of(mons.next, m, link);
-    }
-    return wl_container_of(selmon->link.next, m, link);
-  } else {
-    if (selmon->link.prev == &mons) {
-      return wl_container_of(mons.prev, m, link);
-    }
-    return wl_container_of(selmon->link.prev, m, link);
-  }
+  return dir > 0 ? (selmon->link.next == &mons
+                        ? wl_container_of(mons.next, m, link)
+                        : wl_container_of(selmon->link.next, m, link))
+                 : (selmon->link.prev == &mons
+                        ? wl_container_of(mons.prev, m, link)
+                        : wl_container_of(selmon->link.prev, m, link));
 }
 
 int focusmon(const int dir) {
@@ -788,12 +768,12 @@ int view(const unsigned int tag) {
 }
 
 int handle_key_press(uint32_t mods, uint32_t code) {
+  // log("KEY: %i", code);
   Client *sel;
-  log("KEY: %i", code);
   if (mods == WLR_MODIFIER_LOGO) {
     switch (code) {
     case 28:
-      return spawn("bemenu-run");
+      return spawn("launcher");
     case 25:
       return spawn("passmenu");
     case 57:
@@ -858,7 +838,6 @@ void on_keyboard_key(struct wl_listener *listener, void *data) {
   Keyboard *kb = wl_container_of(listener, kb, key);
   struct wlr_event_keyboard_key *event = data;
 
-  uint32_t keycode = event->keycode + 8;
   uint32_t mods = wlr_keyboard_get_modifiers(kb->device->keyboard);
 
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
@@ -880,7 +859,6 @@ void on_keyboard_modifiers(struct wl_listener *listener, void *data) {
 
 void on_backend_new_input(struct wl_listener *listener, void *data) {
   log("%s", "on_backend_new_input");
-
   struct wlr_input_device *device = data;
 
   if (device->type == WLR_INPUT_DEVICE_KEYBOARD) {
@@ -897,15 +875,12 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
     xkb_context_unref(context);
     wlr_keyboard_set_repeat_info(device->keyboard, 25, 220);
 
-    // TODO do i need this?
     llisten(&device->keyboard->events.modifiers, &kb->modifiers,
             on_keyboard_modifiers);
     llisten(&device->keyboard->events.key, &kb->key, on_keyboard_key);
     llisten(&device->events.destroy, &kb->destroy, on_input_destroy);
 
     wlr_seat_set_keyboard(seat, device);
-
-    wl_list_insert(&keyboards, &kb->link);
   } else if (device->type == WLR_INPUT_DEVICE_POINTER) {
     wlr_cursor_attach_input_device(cursor, device);
   }
@@ -916,7 +891,6 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
 
 void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
                   uint32_t time) {
-  log("%s", "pointerfocus");
   if (c && !surface) {
     surface = client_surface(c);
   }
@@ -941,7 +915,6 @@ void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 }
 
 void motionnotify(uint32_t time) {
-  log("%s", "motionnotify");
   double sx = 0, sy = 0;
   struct wlr_surface *surface = NULL;
   Client *c = NULL;
@@ -950,7 +923,7 @@ void motionnotify(uint32_t time) {
     selmon = xytomon(cursor->x, cursor->y);
   }
 
-  if (cursor_mode == CurMove) {
+  if (dragging) {
     setsize(grabc, cursor->x - grabcx, cursor->y - grabcy, grabc->geom.width,
             grabc->geom.height, 1);
     return;
@@ -974,11 +947,7 @@ void on_cursor_motion(struct wl_listener *listener, void *data) {
 
 void on_seat_request_set_cursor(struct wl_listener *listener, void *data) {
   struct wlr_seat_pointer_request_set_cursor_event *event = data;
-  if (cursor_mode != CurNormal) {
-    return;
-  }
-
-  if (event->seat_client == seat->pointer_state.focused_client) {
+  if (!dragging && event->seat_client == seat->pointer_state.focused_client) {
     wlr_cursor_set_surface(cursor, event->surface, event->hotspot_x,
                            event->hotspot_y);
   }
@@ -988,71 +957,13 @@ void on_seat_request_set_primary_selection(struct wl_listener *listener,
                                            void *data) {
   log("%s", "on_seat_set_primary_selection");
   struct wlr_seat_request_set_primary_selection_event *event = data;
-  log("%s", "whaterer");
   wlr_seat_set_primary_selection(seat, event->source, event->serial);
-  log("%s", "what");
 }
 
 void on_seat_request_set_selection(struct wl_listener *listener, void *data) {
   log("%s", "on_seat_request_set_selection");
   struct wlr_seat_request_set_selection_event *event = data;
   wlr_seat_set_selection(seat, event->source, event->serial);
-}
-
-void on_output_manager_apply(struct wl_listener *listener, void *data) {
-  log("%s", "on_output_manager_apply");
-  struct wlr_output_configuration_v1 *config = data;
-  struct wlr_output_configuration_head_v1 *config_head;
-  int ok = 1;
-  log("%s", "1");
-
-  if (wl_list_empty(&config->heads)) {
-    log("%s", "outputs empty");
-    return;
-  }
-
-  wl_list_for_each(config_head, &config->heads, link) {
-    log("%s", "hi1.1");
-    struct wlr_output *wlr_output = config_head->state.output;
-    log("%s", "hi1.5");
-    log("%i", config_head->state.enabled);
-
-    wlr_output_enable(wlr_output, config_head->state.enabled);
-    log("%s", "hi2");
-    if (config_head->state.enabled) {
-      log("%s", "enabled2");
-      if (config_head->state.mode) {
-        wlr_output_set_mode(wlr_output, config_head->state.mode);
-      } else {
-        wlr_output_set_custom_mode(wlr_output,
-                                   config_head->state.custom_mode.width,
-                                   config_head->state.custom_mode.height,
-                                   config_head->state.custom_mode.refresh);
-      }
-
-      wlr_output_layout_move(output_layout, wlr_output, config_head->state.x,
-                             config_head->state.y);
-    } else if (wl_list_length(&mons) > 1) {
-      Monitor *m;
-      wl_list_for_each(m, &mons, link) {
-        if (m->wlr_output->name == wlr_output->name) {
-          m->wlr_output->enabled = !m->wlr_output->enabled;
-          focusmon(-1);
-          closemon(m);
-          m->wlr_output->enabled = !m->wlr_output->enabled;
-        }
-      }
-    }
-
-    ok &= wlr_output_commit(wlr_output);
-  }
-  if (ok) {
-    wlr_output_configuration_v1_send_succeeded(config);
-    updatemons();
-  } else {
-    wlr_output_configuration_v1_send_failed(config);
-  }
-  wlr_output_configuration_v1_destroy(config);
 }
 
 void on_xwayland_surface_request_activate(struct wl_listener *listener,
@@ -1081,11 +992,8 @@ void on_xwayland_new_surface(struct wl_listener *listener, void *data) {
   c->surface.xwayland = xwayland_surface;
   c->type = xwayland_surface->override_redirect ? X11Unmanaged : X11Managed;
 
-  log("%s", "registering xwayland surface listeners");
   c->map.notify = on_xdg_surface_map;
-  log("%s", "did i get this far?");
   wl_signal_add(&xwayland_surface->events.map, &c->map);
-  log("%s", "did i get this far?");
   llisten(&xwayland_surface->events.unmap, &c->unmap, on_xdg_surface_unmap);
   llisten(&xwayland_surface->events.request_activate, &c->activate,
           on_xwayland_surface_request_activate);
@@ -1093,7 +1001,6 @@ void on_xwayland_new_surface(struct wl_listener *listener, void *data) {
           on_xwayland_surface_request_configure);
   llisten(&xwayland_surface->events.destroy, &c->destroy,
           on_xdg_surface_destroy);
-  log("%s", "registered xwayland surface listeners");
 }
 
 void on_xwayland_ready(struct wl_listener *listener, void *data) {
@@ -1109,7 +1016,6 @@ void on_xwayland_ready(struct wl_listener *listener, void *data) {
 
 int main(int argc, char *argv[]) {
   wlr_log_init(WLR_INFO, NULL);
-  log("%s", "created logging interface");
 
   if (!getenv("XDG_RUNTIME_DIR")) {
     panic("%s", "XDG_RUNTIME_DIR must be set");
@@ -1126,7 +1032,6 @@ int main(int argc, char *argv[]) {
 
   renderer = wlr_backend_get_renderer(backend);
   wlr_renderer_init_wl_display(renderer, display);
-  log("%s", "renderer made");
 
   struct wlr_compositor *compositor = wlr_compositor_create(display, renderer);
   wlr_export_dmabuf_manager_v1_create(display);
@@ -1135,26 +1040,22 @@ int main(int argc, char *argv[]) {
   wlr_data_device_manager_create(display);
   wlr_primary_selection_v1_device_manager_create(display);
   wlr_viewporter_create(display);
-  log("%s", "stuff made");
 
   output_layout = wlr_output_layout_create();
   wlr_xdg_output_manager_v1_create(display, output_layout);
 
   wl_list_init(&mons);
-  // struct wl_listener obnb = {.notify = on_backend_new_output};
   listen(&backend->events.new_output, on_backend_new_output);
 
   wl_list_init(&clients);
   wl_list_init(&fstack);
   wl_list_init(&stack);
   wl_list_init(&independents);
-  log("%s", "lists made");
 
   xdg_shell = wlr_xdg_shell_create(display);
   listen(&xdg_shell->events.new_surface, on_xdg_new_surface);
 
   cursor = wlr_cursor_create();
-  log("%s", "cursor made");
   wlr_cursor_attach_output_layout(cursor, output_layout);
 
   listen(&cursor->events.motion, on_cursor_motion);
@@ -1162,18 +1063,12 @@ int main(int argc, char *argv[]) {
   listen(&cursor->events.axis, on_cursor_axis);
   listen(&cursor->events.frame, on_cursor_frame);
 
-  wl_list_init(&keyboards);
   listen(&backend->events.new_input, on_backend_new_input);
   seat = wlr_seat_create(display, "seat0");
-  log("%s", "seat made");
   listen(&seat->events.request_set_cursor, on_seat_request_set_cursor);
   listen(&seat->events.request_set_selection, on_seat_request_set_selection);
   listen(&seat->events.request_set_primary_selection,
          on_seat_request_set_primary_selection);
-
-  output_mgr = wlr_output_manager_v1_create(display);
-  listen(&output_mgr->events.apply, on_output_manager_apply);
-  log("%s", "listeners registered");
 
   xwayland = wlr_xwayland_create(display, compositor, 1);
   if (!xwayland) {
@@ -1182,7 +1077,6 @@ int main(int argc, char *argv[]) {
     listen(&xwayland->events.ready, on_xwayland_ready);
     listen(&xwayland->events.new_surface, on_xwayland_new_surface);
     setenv("DISPLAY", xwayland->display_name, 1);
-    log("%s", "xwayland listeners registered");
   }
 
   const char *socket = wl_display_add_socket_auto(display);
@@ -1190,23 +1084,14 @@ int main(int argc, char *argv[]) {
     panic("%s", "startup: display_add_socket_auto");
   }
   setenv("WAYLAND_DISPLAY", socket, 1);
-  log("%s", "socket created");
 
   if (!wlr_backend_start(backend)) {
     panic("%s", "unable to start backend");
   }
-  log("%s", "backend started");
 
   selmon = xytomon(cursor->x, cursor->y);
-  if (!selmon) {
-    log("%s", "selected monitor is null");
-  } else {
-    log("%s", "selected monitor is not null");
-  }
 
-  log("%s", "finished setting up");
   wl_display_run(display);
-  log("%s", "main loop ended, cleaning up");
 
   wlr_xwayland_destroy(xwayland);
   wl_display_destroy_clients(display);

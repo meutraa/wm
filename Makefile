@@ -1,4 +1,4 @@
-CFLAGS ?= -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-variable
+CFLAGS ?= -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
 
 CFLAGS += -g -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
 
