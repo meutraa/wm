@@ -45,9 +45,10 @@ typedef struct {
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener destroy;
-  struct wl_listener activate;  // xwayland only
-  struct wl_listener configure; // xwayland only
-  struct wlr_box geom;          // layout-relative
+  struct wl_listener fullscreen; // xwayland only
+  struct wl_listener activate;   // xwayland only
+  struct wl_listener configure;  // xwayland only
+  struct wlr_box geom;           // layout-relative
   Monitor *mon;
   unsigned int type;
   unsigned int tags;
@@ -64,6 +65,7 @@ struct Monitor {
   unsigned int seltags;
   unsigned int tagset[2];
   int position;
+  Client *fullscreen;
 };
 
 struct render_data {
@@ -191,6 +193,13 @@ static inline const char *client_get_appid(Client *c) {
 
 static inline void client_get_geometry(Client *c, struct wlr_box *geom) {
   if (c->type == XDGShell) {
+    /*if (c->mon->fullscreen == c) {
+      geom->x = c->mon->m.x;
+      geom->y = c->mon->m.y;
+      geom->width = c->mon->m.width;
+      geom->height = c->mon->m.height;
+      return;
+    }*/
     wlr_xdg_surface_get_geometry(c->surface.xdg, geom);
     return;
   }
@@ -295,6 +304,13 @@ void arrange(Monitor *m) {
   for_each(Client, clients) {
     if (!VISIBLEON(it, m)) {
       log("%s", "not visible");
+      continue;
+    }
+
+    if (it->mon->fullscreen == it) {
+      log("%s: %d+%d-%dx%d", "arranging full screen client", m->m.x, m->m.y,
+          m->m.width, m->m.height);
+      set_geometry(it, m->m.x, m->m.y, m->m.width, m->m.height, 0);
       continue;
     }
 
@@ -612,8 +628,19 @@ void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&c->activate.link);
   } else if (c->type == XDGShell) {
     wl_list_remove(&c->commit.link);
+    wl_list_remove(&c->fullscreen.link);
   }
   free(c);
+}
+
+void on_xdg_surface_fullscreen(struct wl_listener *listener, void *data) {
+  log("%s", "on_xdg_surface_fullscreen");
+  Client *c = wl_container_of(listener, c, fullscreen);
+  if (c->mon->fullscreen) {
+  }
+  c->mon->fullscreen = c->mon->fullscreen ? NULL : c;
+  wlr_xdg_toplevel_set_fullscreen(c->surface.xdg, c->mon->fullscreen);
+  arrange(c->mon);
 }
 
 void on_xdg_new_surface(struct wl_listener *listener, void *data) {
@@ -637,6 +664,8 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
     llisten(&xdg_surface->events.map, &c->map, on_xdg_surface_map);
     llisten(&xdg_surface->events.unmap, &c->unmap, on_xdg_surface_unmap);
     llisten(&xdg_surface->events.destroy, &c->destroy, on_xdg_surface_destroy);
+    llisten(&xdg_surface->toplevel->events.request_fullscreen, &c->fullscreen,
+            on_xdg_surface_fullscreen);
   }
 }
 
@@ -864,11 +893,9 @@ void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 
   wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
 
-  if (!c || c->type == X11Unmanaged) {
-    return;
+  if (c && c->type != X11Unmanaged) {
+    focusclient(c, 0);
   }
-
-  focusclient(c, 0);
 }
 
 void motionnotify(uint32_t time) {}
