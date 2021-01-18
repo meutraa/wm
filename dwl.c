@@ -54,15 +54,6 @@ typedef struct {
   uint32_t resize; // configure serial of a pending resize
 } Client;
 
-typedef struct {
-  struct wl_list link;
-  struct wlr_input_device *device;
-
-  struct wl_listener modifiers;
-  struct wl_listener key;
-  struct wl_listener destroy;
-} Keyboard;
-
 struct Monitor {
   struct wl_list link;
   struct wlr_output *wlr_output;
@@ -126,11 +117,19 @@ static Monitor *selmon;
   T *it = NULL;                                                                \
   wl_list_for_each_reverse(it, &L, link)
 
+#define CASE(K, C)                                                             \
+  case K:                                                                      \
+    return C
+
 #define CAT(x, y) CAT_(x, y)
 #define CAT_(x, y) x##y
+
+// Only for use in the main() function
 #define listen(S, F)                                                           \
   struct wl_listener CAT(F, listener) = {.notify = F};                         \
   wl_signal_add(S, &(CAT(F, listener)))
+
+struct wlr_keyboard *kb;
 
 static const char *tags[] = {"i", "e", "o", "n"};
 
@@ -212,6 +211,14 @@ static inline const char *client_get_title(Client *c) {
 
 static inline int client_is_unmanaged(Client *c) {
   return c->type == X11Unmanaged;
+}
+
+static inline void client_close(Client *c) {
+  if (client_is_x11(c)) {
+    wlr_xwayland_surface_close(c->surface.xwayland);
+  } else {
+    wlr_xdg_toplevel_send_close(c->surface.xdg);
+  }
 }
 
 static inline uint32_t client_set_size(Client *c, uint32_t width,
@@ -422,16 +429,6 @@ void closemon(Monitor *m) {
       setmon(it, selmon, it->tags);
     }
   }
-}
-
-void on_input_destroy(struct wl_listener *listener, void *data) {
-  log("%s", "on_input_destroy");
-  struct wlr_input_device *device = data;
-  Keyboard *kb = device->data;
-  wl_list_remove(&kb->modifiers.link);
-  wl_list_remove(&kb->key.link);
-  wl_list_remove(&kb->destroy.link);
-  free(kb);
 }
 
 void on_output_destroy(struct wl_listener *listener, void *data) {
@@ -753,105 +750,102 @@ int view(const unsigned int tag) {
   return 1;
 }
 
+int zoom() {
+  Client *sel = selclient();
+  if (sel) {
+    wl_list_remove(&sel->link);
+    wl_list_insert(&clients, &sel->link);
+    focusclient(sel, 1);
+    arrange(selmon);
+  }
+  return 1;
+}
+
+int kill_client() {
+  Client *sel = selclient();
+  if (sel) {
+    client_close(sel);
+  }
+  return 1;
+}
+
 int handle_key_press(uint32_t mods, uint32_t code) {
-  // log("KEY: %i", code);
-  Client *sel;
+  log("key: %i", code);
   if (mods == WLR_MODIFIER_LOGO) {
     switch (code) {
-    case 28:
-      return spawn("launcher");
-    case 25:
-      return spawn("passmenu");
-    case 57:
-      sel = selclient();
-      if (sel) {
-        wl_list_remove(&sel->link);
-        wl_list_insert(&clients, &sel->link);
-        focusclient(sel, 1);
-        arrange(selmon);
-      }
-      return 1;
-    case 46:
-      return focusstack(1);
-    case 35:
-      return focusstack(-1);
-    case 31:
-      return focusmon(1);
-    case 20:
-      return focusmon(-1);
-    case 23:
-      return view(1);
-    case 18:
-      return view(2);
-    case 24:
-      return view(4);
-    case 49:
-      return view(8);
+      CASE(57, zoom());
+      CASE(28, spawn("launcher"));
+      CASE(25, spawn("passmenu"));
+      CASE(46, focusstack(1));
+      CASE(35, focusstack(-1));
+      CASE(31, focusmon(1));
+      CASE(20, focusmon(-1));
+      CASE(23, view(1));
+      CASE(18, view(2));
+      CASE(24, view(4));
+      CASE(49, view(8));
     }
   } else if (mods == (WLR_MODIFIER_LOGO | WLR_MODIFIER_CTRL)) {
     switch (code) {
-    case 28:
-      return spawn("alacritty");
-    case 46:
-      sel = selclient();
-      if (sel) {
-        if (client_is_x11(sel)) {
-          wlr_xwayland_surface_close(sel->surface.xwayland);
-          return 1;
-        }
-        wlr_xdg_toplevel_send_close(sel->surface.xdg);
-      }
-      return 1;
-    case 31:
-      return tagmon(1);
-    case 20:
-      return tagmon(-1);
-    case 23:
-      return tag(1);
-    case 18:
-      return tag(2);
-    case 24:
-      return tag(4);
-    case 49:
-      return tag(8);
+      CASE(46, kill_client());
+      CASE(28, spawn("alacritty"));
+      CASE(31, tagmon(1));
+      CASE(20, tagmon(-1));
+      CASE(23, tag(1));
+      CASE(18, tag(2));
+      CASE(24, tag(4));
+      CASE(49, tag(8));
     }
   }
   return 0;
 }
 
 void on_keyboard_key(struct wl_listener *listener, void *data) {
-  log("%s", "on_keyboard_key");
-  Keyboard *kb = wl_container_of(listener, kb, key);
+  // Keyboard *kb = wl_container_of(listener, kb, key);
   struct wlr_event_keyboard_key *event = data;
-
-  uint32_t mods = wlr_keyboard_get_modifiers(kb->device->keyboard);
+  uint32_t mods = wlr_keyboard_get_modifiers(kb);
 
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
       handle_key_press(mods, event->keycode)) {
     return;
   }
 
-  wlr_seat_set_keyboard(seat, kb->device);
   wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode,
                                event->state);
 }
 
 void on_keyboard_modifiers(struct wl_listener *listener, void *data) {
-  log("%s", "on_keyboard_modifiers");
-  Keyboard *kb = wl_container_of(listener, kb, modifiers);
-  wlr_seat_set_keyboard(seat, kb->device);
-  wlr_seat_keyboard_notify_modifiers(seat, &kb->device->keyboard->modifiers);
+  // Keyboard *kb = wl_container_of(listener, kb, modifiers);
+  // struct wlr_input_device *device = data;
+  wlr_seat_keyboard_notify_modifiers(seat, &kb->modifiers);
 }
 
-void on_backend_new_input(struct wl_listener *listener, void *data) {
-  log("%s", "on_backend_new_input");
-  struct wlr_input_device *device = data;
+struct wl_listener listener_kb_mods = {.notify = on_keyboard_modifiers};
+struct wl_listener listener_kb_key = {.notify = on_keyboard_key};
+struct wl_listener listener_kb_destroy;
 
-  if (device->type == WLR_INPUT_DEVICE_KEYBOARD) {
+void on_input_destroy(struct wl_listener *listener, void *data) {
+  log("%s", "on_input_destroy");
+  // struct wlr_input_device *device = data;
+  // log("device type: %d", device->type);
+  // Keyboard *kb = device->data;
+  wl_list_remove(&listener_kb_key.link);
+  wl_list_remove(&listener_kb_mods.link);
+  wl_list_remove(&listener_kb_destroy.link);
+  kb = NULL;
+  // free(kb);
+}
+
+struct wl_listener listener_kb_destroy = {.notify = on_input_destroy};
+
+void on_backend_new_input(struct wl_listener *listener, void *data) {
+  struct wlr_input_device *device = data;
+  //log("on_backend_new_input: (%d): %s", "", device->type, device->name);
+
+  if (device->type == WLR_INPUT_DEVICE_KEYBOARD &&
+      0 == strcmp(device->name, "OLKB Planck")) {
     struct xkb_context *context;
     struct xkb_keymap *keymap;
-    Keyboard *kb = device->data = calloc(1, sizeof(*kb));
-    kb->device = device;
 
     context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     keymap = xkb_map_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
@@ -861,18 +855,15 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
     xkb_context_unref(context);
     wlr_keyboard_set_repeat_info(device->keyboard, 25, 220);
 
-    llisten(&device->keyboard->events.modifiers, &kb->modifiers,
-            on_keyboard_modifiers);
-    llisten(&device->keyboard->events.key, &kb->key, on_keyboard_key);
-    llisten(&device->events.destroy, &kb->destroy, on_input_destroy);
+    kb = device->keyboard;
+    wl_signal_add(&device->keyboard->events.modifiers, &listener_kb_mods);
+    wl_signal_add(&device->keyboard->events.key, &listener_kb_key);
+    wl_signal_add(&device->keyboard->events.destroy, &listener_kb_destroy);
 
     wlr_seat_set_keyboard(seat, device);
   } else if (device->type == WLR_INPUT_DEVICE_POINTER) {
     wlr_cursor_attach_input_device(cursor, device);
   }
-
-  wlr_seat_set_capabilities(seat, WL_SEAT_CAPABILITY_POINTER |
-                                      WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
 void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
@@ -998,79 +989,76 @@ void on_xwayland_ready(struct wl_listener *listener, void *data) {
 
 int main(int argc, char *argv[]) {
   wlr_log_init(WLR_INFO, NULL);
-
   if (!getenv("XDG_RUNTIME_DIR")) {
     panic("%s", "XDG_RUNTIME_DIR must be set");
   }
 
-  struct wl_display *display = wl_display_create();
-
   sigchld(0);
 
+  wl_list_init(&mons);
+  wl_list_init(&clients);
+  wl_list_init(&fstack);
+  wl_list_init(&stack);
+  wl_list_init(&independents);
+
+  struct wl_display *display = wl_display_create();
   struct wlr_backend *backend = wlr_backend_autocreate(display);
   if (!backend) {
     panic("%s", "couldn't create backend");
   }
-
   renderer = wlr_backend_get_renderer(backend);
-  wlr_renderer_init_wl_display(renderer, display);
-
+  if (!wlr_renderer_init_wl_display(renderer, display)) {
+    panic("%s", "unable to initialize the display/renderer")
+  }
   struct wlr_compositor *compositor = wlr_compositor_create(display, renderer);
+  output_layout = wlr_output_layout_create();
+  xdg_shell = wlr_xdg_shell_create(display);
+  cursor = wlr_cursor_create();
+  seat = wlr_seat_create(display, "seat0");
+  xwayland = wlr_xwayland_create(display, compositor, 1);
+  if (!xwayland) {
+    panic("%s", "failed to create XWayland server");
+  }
+
   wlr_export_dmabuf_manager_v1_create(display);
   wlr_screencopy_manager_v1_create(display);
   wlr_data_control_manager_v1_create(display);
   wlr_data_device_manager_create(display);
   wlr_primary_selection_v1_device_manager_create(display);
   wlr_viewporter_create(display);
-
-  output_layout = wlr_output_layout_create();
   wlr_xdg_output_manager_v1_create(display, output_layout);
-
-  wl_list_init(&mons);
-  listen(&backend->events.new_output, on_backend_new_output);
-
-  wl_list_init(&clients);
-  wl_list_init(&fstack);
-  wl_list_init(&stack);
-  wl_list_init(&independents);
-
-  xdg_shell = wlr_xdg_shell_create(display);
-  listen(&xdg_shell->events.new_surface, on_xdg_new_surface);
-
-  cursor = wlr_cursor_create();
   wlr_cursor_attach_output_layout(cursor, output_layout);
+  wlr_seat_set_capabilities(seat, WL_SEAT_CAPABILITY_POINTER |
+                                      WL_SEAT_CAPABILITY_KEYBOARD);
 
+  // Register listeners
+  listen(&backend->events.new_output, on_backend_new_output);
+  listen(&xdg_shell->events.new_surface, on_xdg_new_surface);
   listen(&cursor->events.motion, on_cursor_motion);
   listen(&cursor->events.button, on_cursor_button);
   listen(&cursor->events.axis, on_cursor_axis);
   listen(&cursor->events.frame, on_cursor_frame);
-
   listen(&backend->events.new_input, on_backend_new_input);
-  seat = wlr_seat_create(display, "seat0");
   listen(&seat->events.request_set_cursor, on_seat_request_set_cursor);
   listen(&seat->events.request_set_selection, on_seat_request_set_selection);
   listen(&seat->events.request_set_primary_selection,
          on_seat_request_set_primary_selection);
-
-  xwayland = wlr_xwayland_create(display, compositor, 1);
-  if (!xwayland) {
-    err("%s", "failed to create XWayland server");
-  } else {
-    listen(&xwayland->events.ready, on_xwayland_ready);
-    listen(&xwayland->events.new_surface, on_xwayland_new_surface);
-    setenv("DISPLAY", xwayland->display_name, 1);
-  }
+  listen(&xwayland->events.ready, on_xwayland_ready);
+  listen(&xwayland->events.new_surface, on_xwayland_new_surface);
 
   const char *socket = wl_display_add_socket_auto(display);
   if (!socket) {
     panic("%s", "startup: display_add_socket_auto");
   }
+
+  setenv("DISPLAY", xwayland->display_name, 1);
   setenv("WAYLAND_DISPLAY", socket, 1);
 
   if (!wlr_backend_start(backend)) {
     panic("%s", "unable to start backend");
   }
 
+  wlr_seat_pointer_warp(seat, 0, 0);
   selmon = xytomon(cursor->x, cursor->y);
 
   wl_display_run(display);
