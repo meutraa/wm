@@ -121,10 +121,9 @@ static Monitor *selmon;
   case K:                                                                      \
     return C
 
+// Only for use in the main() function
 #define CAT(x, y) CAT_(x, y)
 #define CAT_(x, y) x##y
-
-// Only for use in the main() function
 #define listen(S, F)                                                           \
   struct wl_listener CAT(F, listener) = {.notify = F};                         \
   wl_signal_add(S, &(CAT(F, listener)))
@@ -150,21 +149,18 @@ Monitor *xytomon(double x, double y) {
 
 Client *xytoindependent(double x, double y) {
   for_each_reverse(Client, independents) {
-    struct wlr_box geom = {
-        .x = it->surface.xwayland->x,
-        .y = it->surface.xwayland->y,
-        .width = it->surface.xwayland->width,
-        .height = it->surface.xwayland->height,
-    };
-    if (wlr_box_contains_point(&geom, x, y)) {
+    if (wlr_box_contains_point(
+            &(struct wlr_box){
+                .x = it->surface.xwayland->x,
+                .y = it->surface.xwayland->y,
+                .width = it->surface.xwayland->width,
+                .height = it->surface.xwayland->height,
+            },
+            x, y)) {
       return it;
     }
   }
   return NULL;
-}
-
-static inline int client_is_x11(Client *c) {
-  return c->type == X11Managed || c->type == X11Unmanaged;
 }
 
 static inline void client_activate_surface(struct wlr_surface *s,
@@ -181,59 +177,50 @@ static inline void client_activate_surface(struct wlr_surface *s,
 
 static inline void
 client_for_each_surface(Client *c, wlr_surface_iterator_func_t fn, void *data) {
-  if (client_is_x11(c)) {
-    wlr_surface_for_each_surface(c->surface.xwayland->surface, fn, data);
+  if (c->type == XDGShell) {
+    wlr_xdg_surface_for_each_surface(c->surface.xdg, fn, data);
     return;
   }
-  wlr_xdg_surface_for_each_surface(c->surface.xdg, fn, data);
+  wlr_surface_for_each_surface(c->surface.xwayland->surface, fn, data);
 }
 
 static inline const char *client_get_appid(Client *c) {
-  return client_is_x11(c) ? c->surface.xwayland->class
-                          : c->surface.xdg->toplevel->app_id;
+  return c->type == XDGShell ? c->surface.xdg->toplevel->app_id
+                             : c->surface.xwayland->class;
 }
 
 static inline void client_get_geometry(Client *c, struct wlr_box *geom) {
-  if (client_is_x11(c)) {
-    geom->x = c->surface.xwayland->x;
-    geom->y = c->surface.xwayland->y;
-    geom->width = c->surface.xwayland->width;
-    geom->height = c->surface.xwayland->height;
+  if (c->type == XDGShell) {
+    wlr_xdg_surface_get_geometry(c->surface.xdg, geom);
     return;
   }
-  wlr_xdg_surface_get_geometry(c->surface.xdg, geom);
-}
-
-static inline const char *client_get_title(Client *c) {
-  return client_is_x11(c) ? c->surface.xwayland->title
-                          : c->surface.xdg->toplevel->title;
-}
-
-static inline int client_is_unmanaged(Client *c) {
-  return c->type == X11Unmanaged;
+  geom->x = c->surface.xwayland->x;
+  geom->y = c->surface.xwayland->y;
+  geom->width = c->surface.xwayland->width;
+  geom->height = c->surface.xwayland->height;
 }
 
 static inline void client_close(Client *c) {
-  if (client_is_x11(c)) {
-    wlr_xwayland_surface_close(c->surface.xwayland);
-  } else {
+  if (c->type == XDGShell) {
     wlr_xdg_toplevel_send_close(c->surface.xdg);
+    return;
   }
+  wlr_xwayland_surface_close(c->surface.xwayland);
 }
 
 static inline uint32_t client_set_size(Client *c, uint32_t width,
                                        uint32_t height) {
-  if (client_is_x11(c)) {
-    wlr_xwayland_surface_configure(c->surface.xwayland, c->geom.x, c->geom.y,
-                                   width, height);
-    return 0;
+  if (c->type == XDGShell) {
+    return wlr_xdg_toplevel_set_size(c->surface.xdg, width, height);
   }
-  return wlr_xdg_toplevel_set_size(c->surface.xdg, width, height);
+  wlr_xwayland_surface_configure(c->surface.xwayland, c->geom.x, c->geom.y,
+                                 width, height);
+  return 0;
 }
 
 static inline struct wlr_surface *client_surface(Client *c) {
-  return client_is_x11(c) ? c->surface.xwayland->surface
-                          : c->surface.xdg->surface;
+  return c->type == XDGShell ? c->surface.xdg->surface
+                             : c->surface.xwayland->surface;
 }
 
 static inline void llisten(struct wl_signal *sig, struct wl_listener *l,
@@ -244,10 +231,10 @@ static inline void llisten(struct wl_signal *sig, struct wl_listener *l,
 
 static inline struct wlr_surface *
 client_surface_at(Client *c, double cx, double cy, double *sx, double *sy) {
-  return client_is_x11(c)
-             ? wlr_surface_surface_at(c->surface.xwayland->surface, cx, cy, sx,
-                                      sy)
-             : wlr_xdg_surface_surface_at(c->surface.xdg, cx, cy, sx, sy);
+  return c->type == XDGShell
+             ? wlr_xdg_surface_surface_at(c->surface.xdg, cx, cy, sx, sy)
+             : wlr_surface_surface_at(c->surface.xwayland->surface, cx, cy, sx,
+                                      sy);
 }
 
 Client *focustop(Monitor *m) {
@@ -591,7 +578,7 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_surface_map");
   Client *c = wl_container_of(listener, c, map);
 
-  if (client_is_unmanaged(c)) {
+  if (c->type == X11Unmanaged) {
     wl_list_insert(&independents, &c->link);
     return;
   }
@@ -608,7 +595,7 @@ void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_surface_unmap");
   Client *c = wl_container_of(listener, c, unmap);
   wl_list_remove(&c->link);
-  if (!client_is_unmanaged(c)) {
+  if (c->type != X11Unmanaged) {
     setmon(c, NULL, 0);
     wl_list_remove(&c->flink);
     wl_list_remove(&c->slink);
@@ -637,6 +624,7 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
   if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
     c = xdg_surface->data = calloc(1, sizeof(*c));
     c->surface.xdg = xdg_surface;
+    c->type = XDGShell;
 
     // Tells the surface it is tiled
     wlr_xdg_toplevel_set_tiled(c->surface.xdg, WLR_EDGE_TOP | WLR_EDGE_BOTTOM |
@@ -729,7 +717,6 @@ int tag(const unsigned int tag) {
 }
 
 int tagmon(const unsigned int tag) {
-  log("%s", "tagmon");
   Client *sel = selclient();
   if (sel) {
     setmon(sel, dirtomon(tag), 0);
@@ -801,7 +788,6 @@ int handle_key_press(uint32_t mods, uint32_t code) {
 }
 
 void on_keyboard_key(struct wl_listener *listener, void *data) {
-  // Keyboard *kb = wl_container_of(listener, kb, key);
   struct wlr_event_keyboard_key *event = data;
   uint32_t mods = wlr_keyboard_get_modifiers(kb);
 
@@ -815,8 +801,6 @@ void on_keyboard_key(struct wl_listener *listener, void *data) {
 }
 
 void on_keyboard_modifiers(struct wl_listener *listener, void *data) {
-  // Keyboard *kb = wl_container_of(listener, kb, modifiers);
-  // struct wlr_input_device *device = data;
   wlr_seat_keyboard_notify_modifiers(seat, &kb->modifiers);
 }
 
@@ -826,21 +810,17 @@ struct wl_listener listener_kb_destroy;
 
 void on_input_destroy(struct wl_listener *listener, void *data) {
   log("%s", "on_input_destroy");
-  // struct wlr_input_device *device = data;
-  // log("device type: %d", device->type);
-  // Keyboard *kb = device->data;
+  kb = NULL;
   wl_list_remove(&listener_kb_key.link);
   wl_list_remove(&listener_kb_mods.link);
   wl_list_remove(&listener_kb_destroy.link);
-  kb = NULL;
-  // free(kb);
 }
 
 struct wl_listener listener_kb_destroy = {.notify = on_input_destroy};
 
 void on_backend_new_input(struct wl_listener *listener, void *data) {
   struct wlr_input_device *device = data;
-  //log("on_backend_new_input: (%d): %s", "", device->type, device->name);
+  // log("on_backend_new_input: (%d): %s", "", device->type, device->name);
 
   if (device->type == WLR_INPUT_DEVICE_KEYBOARD &&
       0 == strcmp(device->name, "OLKB Planck")) {
@@ -884,7 +864,7 @@ void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 
   wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
 
-  if (!c || client_is_unmanaged(c)) {
+  if (!c || c->type == X11Unmanaged) {
     return;
   }
 
