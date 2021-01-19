@@ -86,6 +86,7 @@ static struct wl_list stack;   // stacking z-order
 static struct wl_list independents;
 static struct wl_list mons;
 
+static struct wlr_keyboard *kb;
 static struct wlr_xwayland *xwayland;
 
 static struct wlr_cursor *cursor;
@@ -123,15 +124,6 @@ static Monitor *selmon;
 #define CASE(K, C)                                                             \
   case K:                                                                      \
     return C
-
-// Only for use in the main() function
-#define CAT(x, y) CAT_(x, y)
-#define CAT_(x, y) x##y
-#define listen(S, F)                                                           \
-  struct wl_listener CAT(F, listener) = {.notify = F};                         \
-  wl_signal_add(S, &(CAT(F, listener)))
-
-struct wlr_keyboard *kb;
 
 static const char *tags[] = {"i", "e", "o", "n"};
 
@@ -1023,19 +1015,31 @@ int main(int argc, char *argv[]) {
                                       WL_SEAT_CAPABILITY_KEYBOARD);
 
   // Register listeners
-  listen(&backend->events.new_output, on_backend_new_output);
-  listen(&xdg_shell->events.new_surface, on_xdg_new_surface);
-  listen(&cursor->events.motion, on_cursor_motion);
-  listen(&cursor->events.button, on_cursor_button);
-  listen(&cursor->events.axis, on_cursor_axis);
-  listen(&cursor->events.frame, on_cursor_frame);
-  listen(&backend->events.new_input, on_backend_new_input);
-  listen(&seat->events.request_set_cursor, on_seat_request_set_cursor);
-  listen(&seat->events.request_set_selection, on_seat_request_set_selection);
-  listen(&seat->events.request_set_primary_selection,
-         on_seat_request_set_primary_selection);
-  listen(&xwayland->events.ready, on_xwayland_ready);
-  listen(&xwayland->events.new_surface, on_xwayland_new_surface);
+  wl_signal_add(&backend->events.new_output,
+                &(struct wl_listener){.notify = on_backend_new_output});
+  wl_signal_add(&xdg_shell->events.new_surface,
+                &(struct wl_listener){.notify = on_xdg_new_surface});
+  wl_signal_add(&cursor->events.motion,
+                &(struct wl_listener){.notify = on_cursor_motion});
+  wl_signal_add(&cursor->events.button,
+                &(struct wl_listener){.notify = on_cursor_button});
+  wl_signal_add(&cursor->events.axis,
+                &(struct wl_listener){.notify = on_cursor_axis});
+  wl_signal_add(&cursor->events.frame,
+                &(struct wl_listener){.notify = on_cursor_frame});
+  wl_signal_add(&backend->events.new_input,
+                &(struct wl_listener){.notify = on_backend_new_input});
+  wl_signal_add(&seat->events.request_set_cursor,
+                &(struct wl_listener){.notify = on_seat_request_set_cursor});
+  wl_signal_add(&seat->events.request_set_selection,
+                &(struct wl_listener){.notify = on_seat_request_set_selection});
+  wl_signal_add(
+      &seat->events.request_set_primary_selection,
+      &(struct wl_listener){.notify = on_seat_request_set_primary_selection});
+  wl_signal_add(&xwayland->events.ready,
+                &(struct wl_listener){.notify = on_xwayland_ready});
+  wl_signal_add(&xwayland->events.new_surface,
+                &(struct wl_listener){.notify = on_xwayland_new_surface});
 
   const char *socket = wl_display_add_socket_auto(display);
   assert(socket);
