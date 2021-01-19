@@ -275,18 +275,15 @@ void set_geometry(Client *c, int x, int y, int w, int h, int interact) {
 }
 
 void arrange(Monitor *m) {
-  unsigned int i, n = 0, h, mw, my, ty, nmaster = 1;
   Client *c;
+  int n = 0;
   wl_list_for_each(c, &clients, link) {
     if (VISIBLEON(c, m) && (0 != strcmp(client_get_appid(c), "floating"))) {
       n++;
     }
   }
 
-  log("%d windows", n);
-
-  mw = n > nmaster ? nmaster ? m->w.width * 0.5 : 0 : m->w.width;
-  i = my = ty = 0;
+  int i = 0;
   for_each(Client, clients) {
     if (!VISIBLEON(it, m)) {
       log("%s", "not visible");
@@ -306,14 +303,15 @@ void arrange(Monitor *m) {
       continue;
     }
 
-    if (i < nmaster) {
-      h = (m->w.height - my) / (MIN(n, nmaster) - i);
-      set_geometry(it, m->w.x, m->w.y + my, mw, h, 0);
-      my += it->geom.height;
+    int sidewidth = m->m.width / n;
+    sidewidth = sidewidth == m->m.width ? 0 : sidewidth;
+    int mainwidth = m->m.width - sidewidth;
+    if (i == 0) {
+      set_geometry(it, m->m.x, m->m.y, mainwidth, m->m.height, 0);
     } else {
-      h = (m->w.height - ty) / (n - i);
-      set_geometry(it, m->w.x + mw, m->w.y + ty, m->w.width - mw, h, 0);
-      ty += it->geom.height;
+      int sideheight = m->m.height / (n - 1);
+      int sidey = sideheight * (i - 1);
+      set_geometry(it, m->m.x + mainwidth, sidey, sidewidth, sideheight, 0);
     }
     i++;
   }
