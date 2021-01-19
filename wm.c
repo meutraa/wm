@@ -1,5 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include <X11/Xlib.h>
+#include <assert.h>
 #include <libinput.h>
 #include <linux/input-event-codes.h>
 #include <sys/wait.h>
@@ -193,13 +194,6 @@ static inline const char *client_get_appid(Client *c) {
 
 static inline void client_get_geometry(Client *c, struct wlr_box *geom) {
   if (c->type == XDGShell) {
-    /*if (c->mon->fullscreen == c) {
-      geom->x = c->mon->m.x;
-      geom->y = c->mon->m.y;
-      geom->width = c->mon->m.width;
-      geom->height = c->mon->m.height;
-      return;
-    }*/
     wlr_xdg_surface_get_geometry(c->surface.xdg, geom);
     return;
   }
@@ -658,7 +652,6 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
                                                    WLR_EDGE_LEFT |
                                                    WLR_EDGE_RIGHT);
 
-    // Do I even need commit?
     llisten(&xdg_surface->surface->events.commit, &c->commit,
             on_xdg_surface_commit);
     llisten(&xdg_surface->events.map, &c->map, on_xdg_surface_map);
@@ -785,8 +778,9 @@ int kill_client() {
   return 1;
 }
 
-int handle_key_press(uint32_t mods, uint32_t code) {
+int handle_key(uint32_t code) {
   log("key: %i", code);
+  uint32_t mods = wlr_keyboard_get_modifiers(kb);
   if (mods == WLR_MODIFIER_LOGO) {
     switch (code) {
       CASE(57, zoom());
@@ -818,10 +812,8 @@ int handle_key_press(uint32_t mods, uint32_t code) {
 
 void on_keyboard_key(struct wl_listener *listener, void *data) {
   struct wlr_event_keyboard_key *event = data;
-  uint32_t mods = wlr_keyboard_get_modifiers(kb);
-
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
-      handle_key_press(mods, event->keycode)) {
+      handle_key(event->keycode)) {
     return;
   }
 
@@ -849,7 +841,7 @@ struct wl_listener listener_kb_destroy = {.notify = on_input_destroy};
 
 void on_backend_new_input(struct wl_listener *listener, void *data) {
   struct wlr_input_device *device = data;
-  // log("on_backend_new_input: (%d): %s", "", device->type, device->name);
+  log("on_backend_new_input: (%d): %s", device->type, device->name);
 
   if (device->type == WLR_INPUT_DEVICE_KEYBOARD &&
       0 == strcmp(device->name, "OLKB Planck")) {
@@ -996,9 +988,7 @@ void on_xwayland_ready(struct wl_listener *listener, void *data) {
 
 int main(int argc, char *argv[]) {
   wlr_log_init(WLR_INFO, NULL);
-  if (!getenv("XDG_RUNTIME_DIR")) {
-    panic("%s", "XDG_RUNTIME_DIR must be set");
-  }
+  assert(getenv("XDG_RUNTIME_DIR"));
 
   sigchld(0);
 
@@ -1010,22 +1000,16 @@ int main(int argc, char *argv[]) {
 
   struct wl_display *display = wl_display_create();
   struct wlr_backend *backend = wlr_backend_autocreate(display);
-  if (!backend) {
-    panic("%s", "couldn't create backend");
-  }
+  assert(backend);
+
   renderer = wlr_backend_get_renderer(backend);
-  if (!wlr_renderer_init_wl_display(renderer, display)) {
-    panic("%s", "unable to initialize the display/renderer")
-  }
+  assert(wlr_renderer_init_wl_display(renderer, display));
   struct wlr_compositor *compositor = wlr_compositor_create(display, renderer);
   output_layout = wlr_output_layout_create();
   xdg_shell = wlr_xdg_shell_create(display);
   cursor = wlr_cursor_create();
   seat = wlr_seat_create(display, "seat0");
-  xwayland = wlr_xwayland_create(display, compositor, 1);
-  if (!xwayland) {
-    panic("%s", "failed to create XWayland server");
-  }
+  assert(xwayland = wlr_xwayland_create(display, compositor, 1));
 
   wlr_export_dmabuf_manager_v1_create(display);
   wlr_screencopy_manager_v1_create(display);
@@ -1054,16 +1038,12 @@ int main(int argc, char *argv[]) {
   listen(&xwayland->events.new_surface, on_xwayland_new_surface);
 
   const char *socket = wl_display_add_socket_auto(display);
-  if (!socket) {
-    panic("%s", "startup: display_add_socket_auto");
-  }
+  assert(socket);
 
   setenv("DISPLAY", xwayland->display_name, 1);
   setenv("WAYLAND_DISPLAY", socket, 1);
 
-  if (!wlr_backend_start(backend)) {
-    panic("%s", "unable to start backend");
-  }
+  assert(wlr_backend_start(backend));
 
   wlr_seat_pointer_warp(seat, 0, 0);
   selmon = xytomon(cursor->x, cursor->y);

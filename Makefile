@@ -1,6 +1,6 @@
 CFLAGS ?= -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
 
-CFLAGS += -g -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
+CFLAGS += -O3 -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
 
 WAYLAND_PROTOCOLS=$(shell pkg-config --variable=pkgdatadir wayland-protocols)
 WAYLAND_SCANNER=$(shell pkg-config --variable=wayland_scanner wayland-scanner)
@@ -9,7 +9,7 @@ PKGS = wlroots wayland-server xcb xkbcommon libinput
 CFLAGS += $(foreach p,$(PKGS),$(shell pkg-config --cflags $(p)))
 LDLIBS += $(foreach p,$(PKGS),$(shell pkg-config --libs $(p)))
 
-all: dwl
+all: wm
 
 xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
@@ -21,12 +21,12 @@ xdg-shell-protocol.c:
 
 xdg-shell-protocol.o: xdg-shell-protocol.h
 
-dwl.o: xdg-shell-protocol.h
+wm.o: xdg-shell-protocol.h
 
-dwl: xdg-shell-protocol.o
+wm: xdg-shell-protocol.o
 
 clean:
-	rm -f dwl *.o *-protocol.h *-protocol.c
+	rm -f wm *.o *-protocol.h *-protocol.c
 
-.DEFAULT_GOAL=dwl
+.DEFAULT_GOAL=wm
 .PHONY: clean
