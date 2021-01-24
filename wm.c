@@ -69,6 +69,15 @@ struct Monitor {
   Client *fullscreen;
 };
 
+typedef struct {
+  struct wl_list link;
+  struct wlr_input_device *device;
+
+  struct wl_listener modifiers;
+  struct wl_listener key;
+  struct wl_listener destroy;
+} Input;
+
 struct render_data {
   struct wlr_output *output;
   struct timespec *when;
@@ -86,7 +95,6 @@ static struct wl_list stack;   // stacking z-order
 static struct wl_list independents;
 static struct wl_list mons;
 
-static struct wlr_keyboard *kb;
 static struct wlr_xwayland *xwayland;
 
 static struct wlr_cursor *cursor;
@@ -780,9 +788,7 @@ int kill_client() {
   return 1;
 }
 
-int handle_key(uint32_t code) {
-  log("key: %i", code);
-  uint32_t mods = wlr_keyboard_get_modifiers(kb);
+int handle_key(uint32_t code, uint32_t mods) {
   if (mods == WLR_MODIFIER_LOGO) {
     switch (code) {
       CASE(57, zoom());
@@ -813,42 +819,52 @@ int handle_key(uint32_t code) {
 }
 
 void on_keyboard_key(struct wl_listener *listener, void *data) {
+  Input *input = wl_container_of(listener, input, key);
   struct wlr_event_keyboard_key *event = data;
+  uint32_t mods = wlr_keyboard_get_modifiers(input->device->keyboard);
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
-      handle_key(event->keycode)) {
+      handle_key(event->keycode, mods)) {
     return;
   }
 
+  wlr_seat_set_keyboard(seat, input->device);
   wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode,
                                event->state);
 }
 
 void on_keyboard_modifiers(struct wl_listener *listener, void *data) {
-  wlr_seat_keyboard_notify_modifiers(seat, &kb->modifiers);
+  Input *input = wl_container_of(listener, input, modifiers);
+  wlr_seat_set_keyboard(seat, input->device);
+  wlr_seat_keyboard_notify_modifiers(seat, &input->device->keyboard->modifiers);
 }
-
-struct wl_listener listener_kb_mods = {.notify = on_keyboard_modifiers};
-struct wl_listener listener_kb_key = {.notify = on_keyboard_key};
-struct wl_listener listener_kb_destroy;
 
 void on_input_destroy(struct wl_listener *listener, void *data) {
   log("%s", "on_input_destroy");
-  kb = NULL;
-  wl_list_remove(&listener_kb_key.link);
-  wl_list_remove(&listener_kb_mods.link);
-  wl_list_remove(&listener_kb_destroy.link);
+  struct wlr_input_device *device = data;
+  Input *input = device->data;
+  log("%s", "hello0");
+  // wl_list_remove(&input->link);
+  log("%s", "hello1");
+  wl_list_remove(&input->modifiers.link);
+  log("%s", "hello2");
+  wl_list_remove(&input->key.link);
+  log("%s", "hello3");
+  wl_list_remove(&input->destroy.link);
+  log("%s", "hello4");
+  free(input);
+  log("%s", "hello5");
 }
-
-struct wl_listener listener_kb_destroy = {.notify = on_input_destroy};
 
 void on_backend_new_input(struct wl_listener *listener, void *data) {
   struct wlr_input_device *device = data;
   log("on_backend_new_input: (%d): %s", device->type, device->name);
 
-  if (device->type == WLR_INPUT_DEVICE_KEYBOARD &&
-      0 == strcmp(device->name, "OLKB Planck")) {
+  if (device->type == WLR_INPUT_DEVICE_KEYBOARD) {
     struct xkb_context *context;
     struct xkb_keymap *keymap;
+
+    Input *input = device->data = calloc(1, sizeof(*input));
+    input->device = device;
 
     context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     keymap = xkb_map_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
@@ -858,12 +874,16 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
     xkb_keymap_unref(keymap);
     xkb_context_unref(context);
 
-    kb = device->keyboard;
-    wl_signal_add(&device->keyboard->events.modifiers, &listener_kb_mods);
-    wl_signal_add(&device->keyboard->events.key, &listener_kb_key);
-    wl_signal_add(&device->keyboard->events.destroy, &listener_kb_destroy);
+    input->key.notify = on_keyboard_key;
+    input->destroy.notify = on_input_destroy;
+    input->modifiers.notify = on_keyboard_modifiers;
+
+    wl_signal_add(&device->keyboard->events.modifiers, &input->modifiers);
+    wl_signal_add(&device->keyboard->events.key, &input->key);
+    wl_signal_add(&device->events.destroy, &input->destroy);
 
     wlr_seat_set_keyboard(seat, device);
+    // wl_list_insert(&keyboards, &input->link);
   } else if (device->type == WLR_INPUT_DEVICE_POINTER) {
     wlr_cursor_attach_input_device(cursor, device);
   }
