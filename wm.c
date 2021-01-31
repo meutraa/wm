@@ -278,7 +278,8 @@ void set_geometry(Client *c, int x, int y, int w, int h, int interact) {
 
 int isfloating(Client *c) {
   const char *title = client_get_appid(c);
-  return strcmp(title, "floating") == 0 || strcmp(title, "gcr-prompter") == 0;
+  return NULL != title &&
+         (strcmp(title, "floating") == 0 || strcmp(title, "gcr-prompter") == 0);
 }
 
 void arrange(Monitor *m) {
@@ -293,7 +294,6 @@ void arrange(Monitor *m) {
   int i = 0;
   for_each(Client, clients) {
     if (!VISIBLEON(it, m)) {
-      log("%s", "not visible");
       continue;
     }
 
@@ -842,17 +842,12 @@ void on_input_destroy(struct wl_listener *listener, void *data) {
   log("%s", "on_input_destroy");
   struct wlr_input_device *device = data;
   Input *input = device->data;
-  log("%s", "hello0");
-  // wl_list_remove(&input->link);
-  log("%s", "hello1");
+  // WHY
+  //wl_list_remove(&input->link);
   wl_list_remove(&input->modifiers.link);
-  log("%s", "hello2");
   wl_list_remove(&input->key.link);
-  log("%s", "hello3");
   wl_list_remove(&input->destroy.link);
-  log("%s", "hello4");
   free(input);
-  log("%s", "hello5");
 }
 
 void on_backend_new_input(struct wl_listener *listener, void *data) {
@@ -883,7 +878,6 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
     wl_signal_add(&device->events.destroy, &input->destroy);
 
     wlr_seat_set_keyboard(seat, device);
-    // wl_list_insert(&keyboards, &input->link);
   } else if (device->type == WLR_INPUT_DEVICE_POINTER) {
     wlr_cursor_attach_input_device(cursor, device);
   }

@@ -1,31 +1,39 @@
-{ pkgs ? import <nixpkgs> { } }:
+{ pkgs ? ((import <nixpkgs> { })) }:
+with pkgs;
 let
-  enableXWayland = true;
-  version = "dc61f471da1a1c9264167635c286b6dcb37b3d6f";
-  sha256 = "0k31chpc4facn7n7kmk0s5wp7vj7mpapwk4as6pjhi1rq37g34lf";
+  version = "b6ba595862a55e5e2899d4c38dd22a1f8ffcabaa";
 
-  wlroots-git = pkgs.wlroots.overrideAttrs (old: {
+  wlroots-git = wlroots.overrideAttrs (old: {
     version = version;
-    src = pkgs.fetchFromGitHub {
+    src = fetchFromGitHub {
       owner = "swaywm";
       repo = "wlroots";
       rev = version;
-      sha256 = sha256;
+      sha256 = "0jv2z6gjic24n5i2h3j4q02cy6dm2bbppjf9a79rj3dgxdfkbv0n";
     };
-    buildInputs = old.buildInputs ++ [ pkgs.libuuid ];
+    buildInputs = old.buildInputs ++ [ libuuid ];
   });
-in pkgs.mkShell {
-  name = "dwl-env";
-  nativeBuildInputs = with pkgs; [ cmake pkg-config ];
-  buildInputs = with pkgs;
-    [
-      libGL
-      libinput
-      libxkbcommon
-      pixman
-      wayland
-      wayland-protocols
-      wlroots-git
-      xorg.libxcb
-    ] ++ pkgs.lib.optional enableXWayland [ x11 ];
+
+in stdenv.mkDerivation rec {
+  pname = "wm";
+  version = "0.2";
+  src = lib.cleanSource ./.;
+
+  nativeBuildInputs = [ wayland-protocols pkg-config ];
+
+  installPhase = ''
+    mkdir -p $out/bin
+    cp wm $out/bin
+  '';
+
+  buildInputs = [
+    libGL
+    libinput
+    libxkbcommon
+    pkgsStatic.pixman
+    wayland
+    wlroots-git
+    pkgsStatic.xorg.libxcb
+    pkgsStatic.x11
+  ];
 }
