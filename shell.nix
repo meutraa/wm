@@ -1,6 +1,7 @@
-{ pkgs ? ((import <nixpkgs> { })) }:
+{ pkgs ? import <nixpkgs> { } }:
 with pkgs;
 let
+  enableXWayland = true;
   version = "3d7aa7386706f6aa8041f27a3fba22d5b4290e82";
 
   wlroots-git = wlroots.overrideAttrs (old: {
@@ -13,27 +14,18 @@ let
     };
     buildInputs = old.buildInputs ++ [ libuuid ];
   });
-
-in stdenv.mkDerivation rec {
-  pname = "wm";
-  version = "0.2";
-  src = lib.cleanSource ./.;
-
-  nativeBuildInputs = [ wayland-protocols pkg-config ];
-
-  installPhase = ''
-    mkdir -p $out/bin
-    cp wm $out/bin
-  '';
-
+in pkgs.mkShell {
+  name = "wm-env";
+  nativeBuildInputs = [ pkg-config ];
   buildInputs = [
     libGL
     libinput
     libxkbcommon
-    pkgsStatic.pixman
+    pixman
     wayland
+    wayland-protocols
     wlroots-git
-    pkgsStatic.xorg.libxcb
-    pkgsStatic.x11
+    xorg.libxcb
+    x11
   ];
 }

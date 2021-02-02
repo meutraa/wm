@@ -33,7 +33,7 @@ wm.o: xdg-shell-protocol.h
 wm: xdg-shell-protocol.o
 
 clean:
-	rm -f wm *.o *-protocol.h *-protocol.c
+	rm -f wm *.o *-protocol.h *-protocol.c result
 
 .DEFAULT_GOAL=wm
 .PHONY: clean

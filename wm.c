@@ -584,12 +584,12 @@ void on_backend_new_output(struct wl_listener *listener, void *data) {
   struct wlr_output *out = data;
   Monitor *m = out->data = calloc(1, sizeof(*m));
 
-  if (!strcmp(out->name, "DP-1")) {
-    configure_monitor(m, out, 2, 3840, 0, 1920, 1080, 60000);
+  if (!strcmp(out->name, "DP-3")) {
+    configure_monitor(m, out, 0, 0, 0, 1920, 1080, 60000);
   } else if (!strcmp(out->name, "DP-2")) {
     configure_monitor(m, out, 1, 1920, 0, 1920, 1080, 60000);
-  } else if (!strcmp(out->name, "DP-3")) {
-    configure_monitor(m, out, 0, 0, 0, 1920, 1080, 239760);
+  } else if (!strcmp(out->name, "DP-1")) {
+    configure_monitor(m, out, 2, 3840, 0, 1920, 1080, 239760);
   }
 }
 
@@ -607,7 +607,9 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
   wl_list_insert(&stack, &c->slink);
 
   client_get_geometry(c, &c->geom);
+  log("%s", "before crash");
   setmon(c, selmon, 0);
+  log("%s", "after crash");
 }
 
 void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
@@ -639,6 +641,9 @@ void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
 void on_xdg_surface_fullscreen(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_surface_fullscreen");
   Client *c = wl_container_of(listener, c, fullscreen);
+  if (NULL == c->mon) {
+    c->mon = selmon;
+  }
   c->mon->fullscreen = c->mon->fullscreen ? NULL : c;
   wlr_xdg_toplevel_set_fullscreen(c->surface.xdg, c->mon->fullscreen);
   arrange(c->mon);
@@ -843,7 +848,7 @@ void on_input_destroy(struct wl_listener *listener, void *data) {
   struct wlr_input_device *device = data;
   Input *input = device->data;
   // WHY
-  //wl_list_remove(&input->link);
+  // wl_list_remove(&input->link);
   wl_list_remove(&input->modifiers.link);
   wl_list_remove(&input->key.link);
   wl_list_remove(&input->destroy.link);
