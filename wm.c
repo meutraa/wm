@@ -42,7 +42,6 @@ typedef struct {
     struct wlr_xdg_surface *xdg;
     struct wlr_xwayland_surface *xwayland;
   } surface;
-  struct wl_listener commit;
   struct wl_listener map;
   struct wl_listener unmap;
   struct wl_listener destroy;
@@ -53,7 +52,6 @@ typedef struct {
   Monitor *mon;
   unsigned int type;
   unsigned int tags;
-  uint32_t resize; // configure serial of a pending resize
 } Client;
 
 struct Monitor {
@@ -402,13 +400,6 @@ void on_output_destroy(struct wl_listener *listener, void *data) {
   free(m);
 }
 
-void on_xdg_surface_commit(struct wl_listener *listener, void *data) {
-  Client *c = wl_container_of(listener, c, commit);
-  if (c->resize && c->resize <= c->surface.xdg->configure_serial) {
-    c->resize = 0;
-  }
-}
-
 void render(struct wlr_surface *surface, int sx, int sy, void *data) {
   struct render_data *rdata = data;
   struct wlr_output *output = rdata->output;
@@ -576,7 +567,6 @@ void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
   if (c->type == X11Managed) {
     wl_list_remove(&c->activate.link);
   } else if (c->type == XDGShell) {
-    wl_list_remove(&c->commit.link);
     wl_list_remove(&c->fullscreen.link);
   }
   free(c);
@@ -601,7 +591,6 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
     Client *c = s->data = calloc(1, sizeof(*c));
     c->surface.xdg = s;
     c->type = XDGShell;
-    c->commit.notify = on_xdg_surface_commit;
     c->map.notify = on_xdg_surface_map;
     c->unmap.notify = on_xdg_surface_unmap;
     c->destroy.notify = on_xdg_surface_destroy;
@@ -612,7 +601,6 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
                                                    WLR_EDGE_LEFT |
                                                    WLR_EDGE_RIGHT);
 
-    wl_signal_add(&s->surface->events.commit, &c->commit);
     wl_signal_add(&s->events.map, &c->map);
     wl_signal_add(&s->events.unmap, &c->unmap);
     wl_signal_add(&s->events.destroy, &c->destroy);
