@@ -197,28 +197,9 @@ static inline void client_get_geometry(Client *c, struct wlr_box *geom) {
     wlr_xdg_surface_get_geometry(c->surface.xdg, geom);
     return;
   }
-  geom->x = c->surface.xwayland->x;
-  geom->y = c->surface.xwayland->y;
-  geom->width = c->surface.xwayland->width;
-  geom->height = c->surface.xwayland->height;
-}
-
-static inline void client_close(Client *c) {
-  if (c->type == XDGShell) {
-    wlr_xdg_toplevel_send_close(c->surface.xdg);
-    return;
-  }
-  wlr_xwayland_surface_close(c->surface.xwayland);
-}
-
-static inline uint32_t client_set_size(Client *c, uint32_t width,
-                                       uint32_t height) {
-  if (c->type == XDGShell) {
-    return wlr_xdg_toplevel_set_size(c->surface.xdg, width, height);
-  }
-  wlr_xwayland_surface_configure(c->surface.xwayland, c->geom.x, c->geom.y,
-                                 width, height);
-  return 0;
+  struct wlr_xwayland_surface *s = c->surface.xwayland;
+  geom = &(struct wlr_box){
+      .x = s->x, .y = s->y, .width = s->width, .height = s->height};
 }
 
 static inline struct wlr_surface *client_surface(Client *c) {
@@ -248,32 +229,13 @@ Client *selclient(void) {
   return c;
 }
 
-void applybounds(Client *c, struct wlr_box *bbox) {
-  c->geom.width = MAX(1, c->geom.width);
-  c->geom.height = MAX(1, c->geom.height);
-
-  if (c->geom.x >= bbox->x + bbox->width) {
-    c->geom.x = bbox->x + bbox->width - c->geom.width;
+void set_geometry(Client *c, int x, int y, int w, int h) {
+  c->geom = (struct wlr_box){.x = x, .y = y, .width = w, .height = h};
+  if (c->type == XDGShell) {
+    c->resize = wlr_xdg_toplevel_set_size(c->surface.xdg, w, h);
+    return;
   }
-  if (c->geom.y >= bbox->y + bbox->height) {
-    c->geom.y = bbox->y + bbox->height - c->geom.height;
-  }
-  if (c->geom.x + c->geom.width <= bbox->x) {
-    c->geom.x = bbox->x;
-  }
-  if (c->geom.y + c->geom.height <= bbox->y) {
-    c->geom.y = bbox->y;
-  }
-}
-
-void set_geometry(Client *c, int x, int y, int w, int h, int interact) {
-  struct wlr_box *bbox = interact ? &sgeom : &c->mon->w;
-  c->geom.x = x;
-  c->geom.y = y;
-  c->geom.width = w;
-  c->geom.height = h;
-  applybounds(c, bbox);
-  c->resize = client_set_size(c, c->geom.width, c->geom.height);
+  wlr_xwayland_surface_configure(c->surface.xwayland, x, y, w, h);
 }
 
 int isfloating(Client *c) {
@@ -300,12 +262,12 @@ void arrange(Monitor *m) {
     if (it->mon->fullscreen == it) {
       log("%s: %d+%d-%dx%d", "arranging full screen client", m->m.x, m->m.y,
           m->m.width, m->m.height);
-      set_geometry(it, m->m.x, m->m.y, m->m.width, m->m.height, 0);
+      set_geometry(it, m->m.x, m->m.y, m->m.width, m->m.height);
       continue;
     }
 
     if (isfloating(it)) {
-      set_geometry(it, m->w.x + 640, 360, 640, 360, 0);
+      set_geometry(it, m->w.x + 640, 360, 640, 360);
       continue;
     }
 
@@ -313,11 +275,11 @@ void arrange(Monitor *m) {
     sidewidth = sidewidth == m->m.width ? 0 : sidewidth;
     int mainwidth = m->m.width - sidewidth;
     if (i == 0) {
-      set_geometry(it, m->m.x, m->m.y, mainwidth, m->m.height, 0);
+      set_geometry(it, m->m.x, m->m.y, mainwidth, m->m.height);
     } else {
       int sideheight = m->m.height / (n - 1);
       int sidey = sideheight * (i - 1);
-      set_geometry(it, m->m.x + mainwidth, sidey, sidewidth, sideheight, 0);
+      set_geometry(it, m->m.x + mainwidth, sidey, sidewidth, sideheight);
     }
     i++;
   }
@@ -371,7 +333,6 @@ void setmon(Client *c, Monitor *m, unsigned int newtags) {
     arrange(oldmon);
   }
   if (m) {
-    applybounds(c, &m->m);
     wlr_surface_send_enter(client_surface(c), m->wlr_output);
     c->tags = newtags ? newtags : m->tagset[m->seltags];
     if (isfullscreen) {
@@ -423,18 +384,6 @@ void on_cursor_button(struct wl_listener *listener, void *data) {
                                  event->state);
 }
 
-void closemon(Monitor *m) {
-  for_each(Client, clients) {
-    if (it->geom.x > m->m.width) {
-      set_geometry(it, it->geom.x - m->w.width, it->geom.y, it->geom.width,
-                   it->geom.height, 0);
-    }
-    if (it->mon == m) {
-      setmon(it, selmon, it->tags);
-    }
-  }
-}
-
 void on_output_destroy(struct wl_listener *listener, void *data) {
   log("%s", "on_output_destroy");
   struct wlr_output *wlr_output = data;
@@ -452,7 +401,11 @@ void on_output_destroy(struct wl_listener *listener, void *data) {
     selmon = wl_container_of(mons.prev, selmon, link);
   while (!selmon->wlr_output->enabled && i++ < nmons);
   focusclient(focustop(selmon), 1);
-  closemon(m);
+  for_each(Client, clients) {
+    if (it->mon == m) {
+      setmon(it, selmon, it->tags);
+    }
+  }
   free(m);
 }
 
@@ -607,9 +560,7 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
   wl_list_insert(&stack, &c->slink);
 
   client_get_geometry(c, &c->geom);
-  log("%s", "before crash");
   setmon(c, selmon, 0);
-  log("%s", "after crash");
 }
 
 void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
@@ -651,11 +602,11 @@ void on_xdg_surface_fullscreen(struct wl_listener *listener, void *data) {
 
 void on_xdg_new_surface(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_new_surface");
-  struct wlr_xdg_surface *xdg_surface = data;
+  struct wlr_xdg_surface *s = data;
 
-  if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-    Client *c = xdg_surface->data = calloc(1, sizeof(*c));
-    c->surface.xdg = xdg_surface;
+  if (s->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+    Client *c = s->data = calloc(1, sizeof(*c));
+    c->surface.xdg = s;
     c->type = XDGShell;
     c->commit.notify = on_xdg_surface_commit;
     c->map.notify = on_xdg_surface_map;
@@ -668,12 +619,11 @@ void on_xdg_new_surface(struct wl_listener *listener, void *data) {
                                                    WLR_EDGE_LEFT |
                                                    WLR_EDGE_RIGHT);
 
-    wl_signal_add(&xdg_surface->surface->events.commit, &c->commit);
-    wl_signal_add(&xdg_surface->events.map, &c->map);
-    wl_signal_add(&xdg_surface->events.unmap, &c->unmap);
-    wl_signal_add(&xdg_surface->events.destroy, &c->destroy);
-    wl_signal_add(&xdg_surface->toplevel->events.request_fullscreen,
-                  &c->fullscreen);
+    wl_signal_add(&s->surface->events.commit, &c->commit);
+    wl_signal_add(&s->events.map, &c->map);
+    wl_signal_add(&s->events.unmap, &c->unmap);
+    wl_signal_add(&s->events.destroy, &c->destroy);
+    wl_signal_add(&s->toplevel->events.request_fullscreen, &c->fullscreen);
   }
 }
 
@@ -786,9 +736,11 @@ int zoom() {
 }
 
 int kill_client() {
-  Client *sel = selclient();
-  if (sel) {
-    client_close(sel);
+  Client *c = selclient();
+  if (c && c->type == XDGShell) {
+    wlr_xdg_toplevel_send_close(c->surface.xdg);
+  } else if (c) {
+    wlr_xwayland_surface_close(c->surface.xwayland);
   }
   return 1;
 }
@@ -847,8 +799,6 @@ void on_input_destroy(struct wl_listener *listener, void *data) {
   log("%s", "on_input_destroy");
   struct wlr_input_device *device = data;
   Input *input = device->data;
-  // WHY
-  // wl_list_remove(&input->link);
   wl_list_remove(&input->modifiers.link);
   wl_list_remove(&input->key.link);
   wl_list_remove(&input->destroy.link);
@@ -922,7 +872,7 @@ void on_cursor_motion(struct wl_listener *listener, void *data) {
 
   if (dragging) {
     set_geometry(dragged_client, cursor->x - grabcx, cursor->y - grabcy,
-                 dragged_client->geom.width, dragged_client->geom.height, 1);
+                 dragged_client->geom.width, dragged_client->geom.height);
     return;
   } else if ((c = xytoindependent(cursor->x, cursor->y))) {
     surface = wlr_surface_surface_at(
@@ -937,11 +887,10 @@ void on_cursor_motion(struct wl_listener *listener, void *data) {
 }
 
 void on_seat_request_set_cursor(struct wl_listener *listener, void *data) {
+  log("%s", "on_seat_request_cursor");
   struct wlr_seat_pointer_request_set_cursor_event *event = data;
-  if (!dragging && event->seat_client == seat->pointer_state.focused_client) {
-    wlr_cursor_set_surface(cursor, event->surface, event->hotspot_x,
-                           event->hotspot_y);
-  }
+  wlr_cursor_set_surface(cursor, event->surface, event->hotspot_x,
+                         event->hotspot_y);
 }
 
 void on_seat_request_set_primary_selection(struct wl_listener *listener,
@@ -1081,8 +1030,7 @@ int main(int argc, char *argv[]) {
 
   assert(wlr_backend_start(backend));
 
-  wlr_seat_pointer_warp(seat, 0, 0);
-  selmon = xytomon(cursor->x, cursor->y);
+  selmon = xytomon(0, 0);
 
   wl_display_run(display);
 

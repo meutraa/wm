@@ -1,4 +1,6 @@
 wm
 *.o
+log.txt
+nohup.out
 xdg-shell-protocol.*
 result
