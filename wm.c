@@ -85,27 +85,24 @@ struct render_data {
   int focused;
 };
 
-static struct wlr_renderer *renderer;
-
-static struct wlr_xdg_shell *xdg_shell;
-
 static struct wl_list clients; // tiling order
 static struct wl_list fstack;  // focus order
 static struct wl_list stack;   // stacking z-order
 static struct wl_list independents;
 static struct wl_list mons;
 
+static struct wlr_renderer *renderer;
+static struct wlr_xdg_shell *xdg_shell;
 static struct wlr_xwayland *xwayland;
-
 static struct wlr_cursor *cursor;
-
 static struct wlr_seat *seat;
-static unsigned int dragging;
-static Client *dragged_client;
+static struct wlr_output_layout *output_layout;
+
+static Client *dclient;
 static int grabcx, grabcy;
 
-static struct wlr_output_layout *output_layout;
 static struct wlr_box sgeom;
+
 static Monitor *selmon;
 
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
@@ -232,7 +229,7 @@ Client *selclient(void) {
 void set_geometry(Client *c, int x, int y, int w, int h) {
   c->geom = (struct wlr_box){.x = x, .y = y, .width = w, .height = h};
   if (c->type == XDGShell) {
-    c->resize = wlr_xdg_toplevel_set_size(c->surface.xdg, w, h);
+    wlr_xdg_toplevel_set_size(c->surface.xdg, w, h);
     return;
   }
   wlr_xwayland_surface_configure(c->surface.xwayland, x, y, w, h);
@@ -355,33 +352,29 @@ void updatemons() {
 }
 
 void on_cursor_axis(struct wl_listener *listener, void *data) {
-  struct wlr_event_pointer_axis *event = data;
-  wlr_seat_pointer_notify_axis(seat, event->time_msec, event->orientation,
-                               event->delta, event->delta_discrete,
-                               event->source);
+  struct wlr_event_pointer_axis *e = data;
+  wlr_seat_pointer_notify_axis(seat, e->time_msec, e->orientation, e->delta,
+                               e->delta_discrete, e->source);
 }
 
 void on_cursor_button(struct wl_listener *listener, void *data) {
-  struct wlr_event_pointer_button *event = data;
+  struct wlr_event_pointer_button *e = data;
 
-  if (event->state == WLR_BUTTON_PRESSED && event->button == BTN_SIDE) {
-    dragged_client = xytoclient(cursor->x, cursor->y);
-    if (dragged_client) {
-      dragging = 1;
-      focusclient(dragged_client, 1);
-      grabcx = cursor->x - dragged_client->geom.x;
-      grabcy = cursor->y - dragged_client->geom.y;
+  if (e->state == WLR_BUTTON_PRESSED && e->button == BTN_SIDE) {
+    dclient = xytoclient(cursor->x, cursor->y);
+    if (dclient) {
+      grabcx = cursor->x - dclient->geom.x;
+      grabcy = cursor->y - dclient->geom.y;
     }
     return;
-  } else if (WLR_BUTTON_RELEASED == event->state && dragging) {
-    dragging = 0;
+  } else if (WLR_BUTTON_RELEASED == e->state && NULL != dclient) {
     selmon = xytomon(cursor->x, cursor->y);
-    setmon(dragged_client, selmon, 0);
+    setmon(dclient, selmon, 0);
+    dclient = NULL;
     return;
   }
 
-  wlr_seat_pointer_notify_button(seat, event->time_msec, event->button,
-                                 event->state);
+  wlr_seat_pointer_notify_button(seat, e->time_msec, e->button, e->state);
 }
 
 void on_output_destroy(struct wl_listener *listener, void *data) {
@@ -777,16 +770,15 @@ int handle_key(uint32_t code, uint32_t mods) {
 
 void on_keyboard_key(struct wl_listener *listener, void *data) {
   Input *input = wl_container_of(listener, input, key);
-  struct wlr_event_keyboard_key *event = data;
+  struct wlr_event_keyboard_key *e = data;
   uint32_t mods = wlr_keyboard_get_modifiers(input->device->keyboard);
-  if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
-      handle_key(event->keycode, mods)) {
+  if (e->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+      handle_key(e->keycode, mods)) {
     return;
   }
 
   wlr_seat_set_keyboard(seat, input->device);
-  wlr_seat_keyboard_notify_key(seat, event->time_msec, event->keycode,
-                               event->state);
+  wlr_seat_keyboard_notify_key(seat, e->time_msec, e->keycode, e->state);
 }
 
 void on_keyboard_modifiers(struct wl_listener *listener, void *data) {
@@ -862,17 +854,17 @@ void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 }
 
 void on_cursor_motion(struct wl_listener *listener, void *data) {
-  struct wlr_event_pointer_motion *event = data;
-  wlr_cursor_move(cursor, event->device, event->delta_x, event->delta_y);
+  struct wlr_event_pointer_motion *e = data;
+  wlr_cursor_move(cursor, e->device, e->delta_x, e->delta_y);
   selmon = xytomon(cursor->x, cursor->y);
 
   double sx = 0, sy = 0;
   struct wlr_surface *surface = NULL;
   Client *c = NULL;
 
-  if (dragging) {
-    set_geometry(dragged_client, cursor->x - grabcx, cursor->y - grabcy,
-                 dragged_client->geom.width, dragged_client->geom.height);
+  if (NULL != dclient) {
+    set_geometry(dclient, cursor->x - grabcx, cursor->y - grabcy,
+                 dclient->geom.width, dclient->geom.height);
     return;
   } else if ((c = xytoindependent(cursor->x, cursor->y))) {
     surface = wlr_surface_surface_at(
@@ -883,27 +875,26 @@ void on_cursor_motion(struct wl_listener *listener, void *data) {
                                 &sx, &sy);
   }
 
-  pointerfocus(c, surface, sx, sy, event->time_msec);
+  pointerfocus(c, surface, sx, sy, e->time_msec);
 }
 
 void on_seat_request_set_cursor(struct wl_listener *listener, void *data) {
   log("%s", "on_seat_request_cursor");
-  struct wlr_seat_pointer_request_set_cursor_event *event = data;
-  wlr_cursor_set_surface(cursor, event->surface, event->hotspot_x,
-                         event->hotspot_y);
+  struct wlr_seat_pointer_request_set_cursor_event *e = data;
+  wlr_cursor_set_surface(cursor, e->surface, e->hotspot_x, e->hotspot_y);
 }
 
 void on_seat_request_set_primary_selection(struct wl_listener *listener,
                                            void *data) {
   log("%s", "on_seat_set_primary_selection");
-  struct wlr_seat_request_set_primary_selection_event *event = data;
-  wlr_seat_set_primary_selection(seat, event->source, event->serial);
+  struct wlr_seat_request_set_primary_selection_event *e = data;
+  wlr_seat_set_primary_selection(seat, e->source, e->serial);
 }
 
 void on_seat_request_set_selection(struct wl_listener *listener, void *data) {
   log("%s", "on_seat_request_set_selection");
-  struct wlr_seat_request_set_selection_event *event = data;
-  wlr_seat_set_selection(seat, event->source, event->serial);
+  struct wlr_seat_request_set_selection_event *e = data;
+  wlr_seat_set_selection(seat, e->source, e->serial);
 }
 
 void on_xwayland_surface_request_activate(struct wl_listener *listener,
@@ -919,9 +910,9 @@ void on_xwayland_surface_request_configure(struct wl_listener *listener,
                                            void *data) {
   log("%s", "on_xwayland_surface_request_configure");
   Client *c = wl_container_of(listener, c, configure);
-  struct wlr_xwayland_surface_configure_event *event = data;
-  wlr_xwayland_surface_configure(c->surface.xwayland, event->x, event->y,
-                                 event->width, event->height);
+  struct wlr_xwayland_surface_configure_event *e = data;
+  wlr_xwayland_surface_configure(c->surface.xwayland, e->x, e->y, e->width,
+                                 e->height);
 }
 
 void on_xwayland_new_surface(struct wl_listener *listener, void *data) {
