@@ -23,17 +23,9 @@ in stdenv.mkDerivation rec {
 
   installPhase = ''
     mkdir -p $out/bin
-    cp wm $out/bin
+    cp main $out/bin/wm
   '';
 
-  buildInputs = [
-    libGL
-    libinput
-    libxkbcommon
-    pkgsStatic.pixman
-    wayland
-    wlroots-git
-    pkgsStatic.xorg.libxcb
-    pkgsStatic.x11
-  ];
+  buildInputs =
+    [ libGL libinput libxkbcommon pixman wayland wlroots-git xorg.libxcb x11 ];
 }

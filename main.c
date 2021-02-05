@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE 700
 #include <X11/Xlib.h>
 #include <assert.h>
+#include <execinfo.h>
 #include <libinput.h>
 #include <linux/input-event-codes.h>
 #include <sys/wait.h>
@@ -120,7 +121,8 @@ static Monitor *smon;
 
 #define CASE(K, C)                                                             \
   case K:                                                                      \
-    return C
+    C;                                                                         \
+    return 1
 
 static const char *tags[] = {"i", "e", "o", "n"};
 
@@ -165,9 +167,12 @@ static inline void client_activate_surface(struct wlr_surface *s,
                                   activated);
     return;
   }
-  if (wlr_surface_is_xdg_surface(s))
-    wlr_xdg_toplevel_set_activated(wlr_xdg_surface_from_wlr_surface(s),
-                                   activated);
+  if (wlr_surface_is_xdg_surface(s)) {
+    struct wlr_xdg_surface *sur = wlr_xdg_surface_from_wlr_surface(s);
+    if (NULL != sur) {
+      wlr_xdg_toplevel_set_activated(sur, activated);
+    };
+  };
 }
 
 static inline const char *client_get_appid(Client *c) {
@@ -213,7 +218,7 @@ void arrange(Monitor *m) {
   }
 
   int i = 0;
-  for_each_reverse(Client, clients) {
+  for_each(Client, clients) {
     if (!visibleon(it, m)) {
       continue;
     }
@@ -273,6 +278,10 @@ void setmon(Client *c, Monitor *m, unsigned int newtags) {
 
   c->mon = m;
   int isfullscreen = 0;
+
+  // Bring to front
+  wl_list_remove(&c->link);
+  wl_list_insert(&clients, &c->link);
 
   if (oldmon) {
     wlr_surface_send_leave(client_surface(c), oldmon->wlr_output);
@@ -398,7 +407,7 @@ void on_output_frame(struct wl_listener *listener, void *data) {
         .when = &now,
         .x = it->geom.x,
         .y = it->geom.y,
-        .focused = it == sclient,
+        .focused = it == sclient || it->mon->fullscreen == it || it == dclient,
     };
 
     if (it->type == XDGShell) {
@@ -501,9 +510,13 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
 void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_surface_unmap");
   Client *c = wl_container_of(listener, c, unmap);
-  wl_list_remove(&c->link);
   if (c->type != X11Unmanaged) {
     setmon(c, NULL, 0);
+  }
+  int sel = sclient == c;
+  wl_list_remove(&c->link);
+  if (sel) {
+    focus(xytoclient(cursor->x, cursor->y));
   }
 }
 
@@ -560,43 +573,20 @@ void on_cursor_frame(struct wl_listener *listener, void *data) {
   wlr_seat_pointer_notify_frame(seat);
 }
 
-Monitor *dirtomon(int dir) {
-  Monitor *m;
-  return dir > 0 ? (smon->link.next == &mons
-                        ? wl_container_of(mons.next, m, link)
-                        : wl_container_of(smon->link.next, m, link))
-                 : (smon->link.prev == &mons
-                        ? wl_container_of(mons.prev, m, link)
-                        : wl_container_of(smon->link.prev, m, link));
-}
-
-int focusmon(const int dir) {
-  do {
-    smon = dirtomon(dir);
-  } while (!smon->wlr_output->enabled);
-  return 1;
-}
-
-int focusstack(const int dir) {
+void focusstack(const int dir) {
   if (NULL == sclient) {
-    return 1;
+    return;
   }
 
   Client *c;
   if (dir > 0) {
     wl_list_for_each(c, &sclient->link, link) {
-      if (&c->link == &clients) {
-        continue;
-      }
       if (visibleon(c, smon)) {
         break;
       }
     }
   } else {
     wl_list_for_each_reverse(c, &sclient->link, link) {
-      if (&c->link == &clients) {
-        continue;
-      }
       if (visibleon(c, smon)) {
         break;
       }
@@ -605,81 +595,57 @@ int focusstack(const int dir) {
   if (c) {
     focus(c);
   }
-  return 1;
 }
 
 void sigchld(int unused) {
   if (signal(SIGCHLD, sigchld) == SIG_ERR) {
-    fmt("%s", "can't install SIGCHLD handler");
+    log("%s", "can't install SIGCHLD handler");
   }
   while (0 < waitpid(-1, NULL, WNOHANG))
     ;
 }
 
-int spawn(const char *cmd) {
+void spawn(const char *cmd) {
   if (fork() == 0) {
     setsid();
     execvp(cmd, (char *[]){NULL});
   }
-  return 1;
 }
 
-int tag(const unsigned int tag) {
+void tag(const unsigned int tag) {
   if (sclient && tag & TAGMASK) {
     sclient->tags = tag & TAGMASK;
     arrange(smon);
   }
-  return 1;
 }
 
-int tagmon(const unsigned int tag) {
-  if (sclient) {
-    setmon(sclient, dirtomon(tag), 0);
-  }
-  return 1;
-}
-
-int view(const unsigned int tag) {
+void view(const unsigned int tag) {
   if ((tag & TAGMASK) == smon->tagset[smon->seltags]) {
-    return 1;
+    return;
   }
   smon->seltags ^= 1;
   if (tag & TAGMASK) {
     smon->tagset[smon->seltags] = tag & TAGMASK;
   }
   arrange(smon);
-  return 1;
+  return;
 }
 
-int zoom() {
-  if (sclient) {
-    wl_list_remove(&sclient->link);
-    wl_list_insert(&clients, &sclient->link);
-    arrange(smon);
-  }
-  return 1;
-}
-
-int kill_client() {
+void kill_client() {
   if (sclient && sclient->type == XDGShell) {
     wlr_xdg_toplevel_send_close(sclient->surface.xdg);
   } else if (sclient) {
     wlr_xwayland_surface_close(sclient->surface.xwayland);
   }
-  focus(xytoclient(cursor->x, cursor->y));
-  return 1;
 }
 
 int handle_key(uint32_t code, uint32_t mods) {
   if (mods == WLR_MODIFIER_LOGO) {
     switch (code) {
-      CASE(57, zoom());
       CASE(28, spawn("launcher"));
       CASE(25, spawn("passmenu"));
       CASE(46, focusstack(1));
       CASE(35, focusstack(-1));
-      CASE(31, focusmon(1));
-      CASE(20, focusmon(-1));
       CASE(23, view(1));
       CASE(18, view(2));
       CASE(24, view(4));
@@ -689,8 +655,6 @@ int handle_key(uint32_t code, uint32_t mods) {
     switch (code) {
       CASE(46, kill_client());
       CASE(28, spawn("alacritty"));
-      CASE(31, tagmon(1));
-      CASE(20, tagmon(-1));
       CASE(23, tag(1));
       CASE(18, tag(2));
       CASE(24, tag(4));
@@ -762,29 +726,6 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
   }
 }
 
-void pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
-                  uint32_t time) {
-  if (c && !surface) {
-    surface = client_surface(c);
-  }
-
-  if (!surface) {
-    wlr_seat_pointer_notify_clear_focus(seat);
-    return;
-  }
-
-  if (surface == seat->pointer_state.focused_surface) {
-    wlr_seat_pointer_notify_motion(seat, time, sx, sy);
-    return;
-  }
-
-  wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
-
-  if (c && c->type != X11Unmanaged) {
-    focus(c);
-  }
-}
-
 void on_cursor_motion(struct wl_listener *listener, void *data) {
   struct wlr_event_pointer_motion *e = data;
   wlr_cursor_move(cursor, e->device, e->delta_x, e->delta_y);
@@ -807,13 +748,33 @@ void on_cursor_motion(struct wl_listener *listener, void *data) {
                                 &sx, &sy);
   }
 
-  pointerfocus(c, surface, sx, sy, e->time_msec);
+  if (c && !surface) {
+    surface = client_surface(c);
+  }
+
+  if (!surface) {
+    wlr_seat_pointer_notify_clear_focus(seat);
+    return;
+  }
+
+  if (surface == seat->pointer_state.focused_surface) {
+    wlr_seat_pointer_notify_motion(seat, e->time_msec, sx, sy);
+    return;
+  }
+
+  wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
+
+  if (c && c->type != X11Unmanaged) {
+    focus(c);
+  }
 }
 
 void on_seat_request_set_cursor(struct wl_listener *listener, void *data) {
   log("%s", "on_seat_request_cursor");
   struct wlr_seat_pointer_request_set_cursor_event *e = data;
-  wlr_cursor_set_surface(cursor, e->surface, e->hotspot_x, e->hotspot_y);
+  if (e->seat_client == seat->pointer_state.focused_client) {
+    wlr_cursor_set_surface(cursor, e->surface, e->hotspot_x, e->hotspot_y);
+  }
 }
 
 void on_seat_request_set_primary_selection(struct wl_listener *listener,
@@ -878,10 +839,22 @@ void on_xwayland_ready(struct wl_listener *listener, void *data) {
   xcb_disconnect(xc);
 }
 
+void handler(int sig) {
+  void *array[10];
+  size_t size;
+
+  size = backtrace(array, 10);
+
+  fprintf(stderr, "Error: signal %d:\n", sig);
+  backtrace_symbols_fd(array, size, STDERR_FILENO);
+  exit(1);
+}
+
 int main(int argc, char *argv[]) {
   wlr_log_init(WLR_INFO, NULL);
   assert(getenv("XDG_RUNTIME_DIR"));
 
+  signal(SIGSEGV, handler);
   sigchld(0);
 
   wl_list_init(&mons);
