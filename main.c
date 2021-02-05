@@ -498,10 +498,9 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
   Client *c = wl_container_of(listener, c, map);
   if (c->type == X11Unmanaged) {
     wl_list_insert(&independents, &c->link);
-  } else {
-    wl_list_insert(&clients, &c->link);
+    return;
   }
-
+  wl_list_insert(&clients, &c->link);
   setmon(c, smon, 0);
   focus(c);
 }
