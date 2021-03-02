@@ -2,7 +2,7 @@
 with pkgs;
 let
   enableXWayland = true;
-  version = "3d7aa7386706f6aa8041f27a3fba22d5b4290e82";
+  version = "5e19e0053a5800252a27ce127fd015d641ee2e9e";
 
   wlroots-git = wlroots.overrideAttrs (old: {
     version = version;
@@ -10,9 +10,12 @@ let
       owner = "swaywm";
       repo = "wlroots";
       rev = version;
-      sha256 = "1z98zyqarp3g7cv5mf8qhlawav42dxlglm6r3lvw4b6k6ql3ij60";
+      sha256 = "1ljrv8glahf5x32z5lab6xf6ngc3c3ji7mix2sgrzz5pk008fnx1";
     };
-    buildInputs = old.buildInputs ++ [ libuuid ];
+    buildInputs = old.buildInputs ++ [ 
+      libuuid 
+      xorg.xcbutilrenderutil
+    ];
   });
 in pkgs.mkShell {
   name = "wm-env";
@@ -25,7 +28,6 @@ in pkgs.mkShell {
     wayland
     wayland-protocols
     wlroots-git
-    xorg.libxcb
     x11
   ];
 }

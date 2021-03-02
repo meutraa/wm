@@ -1,6 +1,6 @@
 CFLAGS ?= -pedantic -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare
 
-CFLAGS += -g -rdynamic -O3 -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
+CFLAGS += -rdynamic -O3 -DXWAYLAND -I. -DWLR_USE_UNSTABLE -std=c11
 
 WAYLAND_PROTOCOLS=$(shell pkg-config --variable=pkgdatadir wayland-protocols)
 WAYLAND_SCANNER=$(shell pkg-config --variable=wayland_scanner wayland-scanner)
@@ -27,6 +27,8 @@ xdg-shell-protocol.c:
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
 xdg-shell-protocol.o: xdg-shell-protocol.h
+
+wlr-screencopy.o: wlr-screencopy.h
 
 main.o: xdg-shell-protocol.h
 

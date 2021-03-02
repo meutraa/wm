@@ -9,9 +9,9 @@ let
       owner = "swaywm";
       repo = "wlroots";
       rev = version;
-      sha256 = "1z98zyqarp3g7cv5mf8qhlawav42dxlglm6r3lvw4b6k6ql3ij60";
+      sha256 = "1ljrv8glahf5x32z5lab6xf6ngc3c3ji7mix2sgrzz5pk008fnx1";
     };
-    buildInputs = old.buildInputs ++ [ libuuid ];
+    buildInputs = old.buildInputs ++ [ libuuid xorg.xcbutilrenderutil ];
   });
 
 in stdenv.mkDerivation rec {
@@ -26,6 +26,5 @@ in stdenv.mkDerivation rec {
     cp main $out/bin/wm
   '';
 
-  buildInputs =
-    [ libGL libinput libxkbcommon pixman wayland wlroots-git xorg.libxcb x11 ];
+  buildInputs = [ libGL libinput libxkbcommon pixman wayland wlroots-git x11 ];
 }
