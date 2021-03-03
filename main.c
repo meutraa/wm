@@ -91,7 +91,6 @@ static Client *fsclient;
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
 #define LENGTH(X) (sizeof X / sizeof X[0])
 #define END(A) ((A) + LENGTH(A))
-#define TAGMASK ((1 << LENGTH(tags)) - 1)
 #define log(fmt, ...) wlr_log(WLR_INFO, fmt, ##__VA_ARGS__)
 #define panic(fmt, ...)                                                        \
   wlr_log(WLR_ERROR, fmt, ##__VA_ARGS__);                                      \
@@ -105,10 +104,10 @@ static Client *fsclient;
   T *it = NULL;                                                                \
   wl_list_for_each_reverse(it, &L, link)
 
-#define CASE(K, C)                                                             \
-  case K:                                                                      \
-    C;                                                                         \
-    return 1
+#define CASE(K, COND, C) \
+  case K:                \
+    if (COND) { C; }     \
+     return 1;
 
 Client *xytoclient(double x, double y) {
   for_each(Client, clients) {
@@ -156,7 +155,7 @@ static inline const char *client_get_appid(Client *c) {
 }
 
 static inline struct wlr_surface *client_surface(Client *c) {
-  return c->type == XDGShell ? c->surface.xdg->surface
+  return c == NULL ? NULL : c->type == XDGShell ? c->surface.xdg->surface
                              : c->surface.xwayland->surface;
 }
 
@@ -207,18 +206,15 @@ void arrange() {
 
   for_each(Client, clients) {
     if (it->tag != tag) {
-      log("%s", "it is not on this tag");
       continue;
     }
 
     if (fsclient == it) {
-      log("%s", "it is fullscreen");
       set_geometry(it, 0, 0, mw, mh);
       break;
     }
 
     if (isfloating(it)) {
-      log("%s", "it is floating!");
       set_geometry(it, 0, 0, 640, 480);
       continue;
     }
@@ -229,7 +225,6 @@ void arrange() {
 		ch = rows ? mh/ rows : mh;
 		cx = cn*cw;
 		cy = rn*ch;
-    log("%d.x %d.y %d.w %d.h", cx, cy, cw, ch);
 		set_geometry(it, cx, cy, cw, ch);
 		rn++;
 		if(rn >= rows) {
@@ -242,25 +237,39 @@ void arrange() {
 
 void focus(Client *c) {
   struct wlr_surface *old = seat->keyboard_state.focused_surface;
-  if (c && client_surface(c) == old) {
+  sclient = c;
+  struct wlr_surface *new = client_surface(c);
+
+  log("%s", "1");
+  if (c && new == old) {
     return;
   }
 
-  sclient = c;
-  if (old && (!c || client_surface(c) != old)) {
+  log("%s", "2");
+  if (old && (!c || new != old)) {
     client_activate_surface(old, 0);
   }
 
+  log("%s", "3");
   if (!c) {
     wlr_seat_keyboard_notify_clear_focus(seat);
     return;
   }
 
+  log("%s", "4");
   struct wlr_keyboard *kb = wlr_seat_get_keyboard(seat);
-  wlr_seat_keyboard_notify_enter(seat, client_surface(c), kb->keycodes,
-                                 kb->num_keycodes, &kb->modifiers);
+  log("%s", "4.5");
+  if (!new) {
+	  log("%s", "4.75");
+  }
+  wlr_seat_keyboard_notify_enter(seat, new, kb->keycodes, kb->num_keycodes, &kb->modifiers);
 
-  client_activate_surface(client_surface(c), 1);
+  log("%s", "5");
+  client_activate_surface(new, 1);
+}
+
+void focus_under_cursor() {
+	focus(xytoclient(cursor->x, cursor->y));
 }
 
 void on_cursor_axis(struct wl_listener *listener, void *data) {
@@ -294,6 +303,20 @@ void render(struct wlr_surface *surface, int sx, int sy, void *data) {
   }
 }
 
+void submit_client(Client *it, struct timespec *time) {
+    struct render_data *d = &(struct render_data){
+        .when = time,
+        .x = it->geom.x,
+        .y = it->geom.y,
+    };
+
+    if (it->type == XDGShell) {
+      wlr_xdg_surface_for_each_surface(it->surface.xdg, render, d);
+    } else {
+      wlr_surface_for_each_surface(it->surface.xwayland->surface, render, d);
+    }
+}
+
 void on_output_frame(struct wl_listener *listener, void *data) {
   if (!wlr_output_attach_render(mo, NULL)) {
     return;
@@ -307,22 +330,12 @@ void on_output_frame(struct wl_listener *listener, void *data) {
 
   Client *it = NULL;
   wl_list_for_each_reverse(it, &clients, link) {
-    if (it->tag != tag) {
-      continue;
-    }
-
-    struct render_data *d = &(struct render_data){
-        .when = &now,
-        .x = it->geom.x,
-        .y = it->geom.y,
-    };
-
-    if (it->type == XDGShell) {
-      wlr_xdg_surface_for_each_surface(it->surface.xdg, render, d);
-    } else {
-      wlr_surface_for_each_surface(it->surface.xwayland->surface, render, d);
+    if (it->tag == tag && it != fsclient) {
+      submit_client(it, &now);
     }
   }
+
+  if (fsclient) submit_client(fsclient, &now);
 
   Client *in;
   wl_list_for_each(in, &independents, link) {
@@ -375,6 +388,7 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
     return;
   }
   wl_list_insert(&clients, &c->link);
+  c->tag = tag;
   arrange();
   focus(c);
 }
@@ -387,7 +401,7 @@ void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
   wl_list_remove(&c->link);
   arrange();
   if (sel) {
-    focus(xytoclient(cursor->x, cursor->y));
+    focus_under_cursor();
   }
 }
 
@@ -409,8 +423,8 @@ void on_xdg_surface_fullscreen(struct wl_listener *listener, void *data) {
   log("%s", "on_xdg_surface_fullscreen");
   Client *c = wl_container_of(listener, c, fullscreen);
   fsclient = fsclient ? NULL : c;
-  wlr_xdg_toplevel_set_fullscreen(c->surface.xdg, fsclient);
   arrange();
+  wlr_xdg_toplevel_set_fullscreen(c->surface.xdg, fsclient);
 }
 
 void on_xdg_new_surface(struct wl_listener *listener, void *data) {
@@ -441,23 +455,23 @@ void on_cursor_frame(struct wl_listener *listener, void *data) {
   wlr_seat_pointer_notify_frame(seat);
 }
 
-void focusstack(const int dir) {
-  if (NULL == sclient) {
-    return;
-  }
-
+void forward() {
   Client *c;
-  if (dir > 0) {
-    wl_list_for_each(c, &sclient->link, link) {
-      if (c->tag == tag) break;
+  wl_list_for_each(c, &sclient->link, link) {
+      if (c->tag == tag) {
+        focus(c);
+        return;
+      }
+   }
+}
+
+void backward() {
+  Client *c;
+  wl_list_for_each_reverse(c, &sclient->link, link) {
+    if (c->tag == tag) {
+      focus(c);
+      return;
     }
-  } else {
-    wl_list_for_each_reverse(c, &sclient->link, link) {
-      if (c->tag == tag) break;
-    }
-  }
-  if (c) {
-    focus(c);
   }
 }
 
@@ -470,39 +484,29 @@ void sigchld(int unused) {
 }
 
 void spawn(const char *cmd) {
-  if (fork() == 0) {
-    setsid();
-    execvp(cmd, (char *[]){NULL});
-  }
+  setsid();
+  execvp(cmd, (char *[]){NULL});
 }
 
 void select() {
-  if (sclient) {
-    wl_list_remove(&sclient->link);
-    wl_list_insert(&clients, &sclient->link);
-  }
+  wl_list_remove(&sclient->link);
+  wl_list_insert(&clients, &sclient->link);
+  arrange();
 }
 
 void tagit(const int tag) {
-  if (!sclient || sclient->tag == tag) {
-    return;
-  }
   sclient->tag = tag;
   arrange();
+  focus_under_cursor();
 }
 
 void view(const int t) {
-  if (tag == t) {
-    return;
-  }
   tag = t;
   arrange();
+  focus_under_cursor();
 }
 
 void kill_client() {
-  if (!sclient) {
-    return;
-  }
   if (sclient->type == XDGShell) {
     wlr_xdg_toplevel_send_close(sclient->surface.xdg);
   } else {
@@ -513,24 +517,24 @@ void kill_client() {
 int handle_key(uint32_t code, uint32_t mods) {
   if (mods == WLR_MODIFIER_LOGO) {
     switch (code) {
-      CASE(28, spawn("launcher"));
-      CASE(25, spawn("passmenu"));
-      CASE(57, select());
-      CASE(46, focusstack(1));
-      CASE(35, focusstack(-1));
-      CASE(23, view(0));
-      CASE(18, view(1));
-      CASE(24, view(2));
-      CASE(49, view(3));
+      CASE(28, !fork(), spawn("launcher"));
+      CASE(25, !fork(), spawn("passmenu"));
+      CASE(57, sclient, select());
+//      CASE(46, sclient, forward());
+//     CASE(35, sclient, backward());
+      CASE(23, tag != 0, view(0));
+      CASE(18, tag != 1, view(1));
+      CASE(24, tag != 2, view(2));
+      CASE(49, tag != 3, view(3));
     }
   } else if (mods == (WLR_MODIFIER_LOGO | WLR_MODIFIER_CTRL)) {
     switch (code) {
-      CASE(46, kill_client());
-      CASE(28, spawn("alacritty"));
-      CASE(23, tagit(0));
-      CASE(18, tagit(1));
-      CASE(24, tagit(2));
-      CASE(49, tagit(3));
+      CASE(46, sclient, kill_client());
+      CASE(28, !fork(), spawn("alacritty"));
+      CASE(23, sclient && sclient->tag != 0, tagit(0));
+      CASE(18, sclient && sclient->tag != 1, tagit(1));
+      CASE(24, sclient && sclient->tag != 2, tagit(2));
+      CASE(49, sclient && sclient->tag != 3, tagit(3));
     }
   }
   return 0;
@@ -791,6 +795,7 @@ int main(int argc, char *argv[]) {
   wl_display_destroy_clients(display);
   wlr_backend_destroy(backend);
   wlr_cursor_destroy(cursor);
+  wlr_output_layout_destroy(ol);
   wlr_seat_destroy(seat);
   wl_display_destroy(display);
   return EXIT_SUCCESS;

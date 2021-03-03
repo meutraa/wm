@@ -1,6 +1,6 @@
-wm
 *.o
+main
 log.txt
 nohup.out
-xdg-shell-protocol.*
+*-protocol.*
 result
