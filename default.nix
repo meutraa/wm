@@ -1,7 +1,7 @@
 { pkgs ? ((import <nixpkgs> { })) }:
 with pkgs;
 let
-  version = "3d7aa7386706f6aa8041f27a3fba22d5b4290e82";
+  version = "c740fccc9dd0913908c0632c10f8c6d10b2b1ca4";
 
   wlroots-git = wlroots.overrideAttrs (old: {
     version = version;
@@ -9,9 +9,9 @@ let
       owner = "swaywm";
       repo = "wlroots";
       rev = version;
-      sha256 = "1ljrv8glahf5x32z5lab6xf6ngc3c3ji7mix2sgrzz5pk008fnx1";
+      sha256 = "0667qvrfp338cmswaykvga487bql0xhisndwcq50n7xcjlib1lxj";
     };
-    buildInputs = old.buildInputs ++ [ libuuid xorg.xcbutilrenderutil ];
+    buildInputs = old.buildInputs ++ [ libuuid xorg.xcbutilrenderutil xwayland ];
   });
 
 in stdenv.mkDerivation rec {

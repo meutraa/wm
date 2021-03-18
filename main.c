@@ -183,7 +183,6 @@ int isfloating(Client *c) {
 }
 
 void arrange() {
-  log("%s", "arranging");
   unsigned int i = 0, n = 0, cols = 0, rows = 0, cn = 0, rn = 0, cx = 0, cy = 0, cw = 0, ch = 0;
   Client *c;
 
@@ -240,31 +239,22 @@ void focus(Client *c) {
   sclient = c;
   struct wlr_surface *new = client_surface(c);
 
-  log("%s", "1");
   if (c && new == old) {
     return;
   }
 
-  log("%s", "2");
   if (old && (!c || new != old)) {
     client_activate_surface(old, 0);
   }
 
-  log("%s", "3");
   if (!c) {
     wlr_seat_keyboard_notify_clear_focus(seat);
     return;
   }
 
-  log("%s", "4");
   struct wlr_keyboard *kb = wlr_seat_get_keyboard(seat);
-  log("%s", "4.5");
-  if (!new) {
-	  log("%s", "4.75");
-  }
   wlr_seat_keyboard_notify_enter(seat, new, kb->keycodes, kb->num_keycodes, &kb->modifiers);
 
-  log("%s", "5");
   client_activate_surface(new, 1);
 }
 
@@ -284,7 +274,7 @@ void on_cursor_button(struct wl_listener *listener, void *data) {
 }
 
 void on_output_destroy(struct wl_listener *listener, void *data) {
-  log("%s", "on_output_destroy");
+  //log("%s", "on_output_destroy");
   wlr_output_layout_remove(ol, mo);
   wl_list_remove(&mon_destroy.link);
   wl_list_remove(&mon_frame.link);
@@ -352,13 +342,12 @@ void on_output_frame(struct wl_listener *listener, void *data) {
 }
 
 void on_backend_new_output(struct wl_listener *listener, void *data) {
-  log("%s", "on_backend_new_output");
+  //log("%s", "on_backend_new_output");
   mo = data;
   mon_frame.notify = on_output_frame;
   mon_destroy.notify = on_output_destroy;
 
   for_each(struct wlr_output_mode, mo->modes) {
-    log("%dx%d@%d", it->width, it->height, it->refresh);
     if (it->width == 5120 && it->height == 1440 && it->refresh == 239761) {
       wlr_output_set_mode(mo, it);
       break;
@@ -381,7 +370,7 @@ void on_backend_new_output(struct wl_listener *listener, void *data) {
 
 // Ready to manage this surface
 void on_xdg_surface_map(struct wl_listener *listener, void *data) {
-  log("%s", "on_xdg_surface_map");
+  //log("%s", "on_xdg_surface_map");
   Client *c = wl_container_of(listener, c, map);
   if (c->type == X11Unmanaged) {
     wl_list_insert(&independents, &c->link);
@@ -395,7 +384,7 @@ void on_xdg_surface_map(struct wl_listener *listener, void *data) {
 
 // Stop managing this surface
 void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
-  log("%s", "on_xdg_surface_unmap");
+  //log("%s", "on_xdg_surface_unmap");
   Client *c = wl_container_of(listener, c, unmap);
   int sel = sclient == c;
   wl_list_remove(&c->link);
@@ -406,7 +395,7 @@ void on_xdg_surface_unmap(struct wl_listener *listener, void *data) {
 }
 
 void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
-  log("%s", "on_xdg_surface_destroy");
+  //log("%s", "on_xdg_surface_destroy");
   Client *c = wl_container_of(listener, c, destroy);
   wl_list_remove(&c->map.link);
   wl_list_remove(&c->unmap.link);
@@ -420,7 +409,7 @@ void on_xdg_surface_destroy(struct wl_listener *listener, void *data) {
 }
 
 void on_xdg_surface_fullscreen(struct wl_listener *listener, void *data) {
-  log("%s", "on_xdg_surface_fullscreen");
+  //log("%s", "on_xdg_surface_fullscreen");
   Client *c = wl_container_of(listener, c, fullscreen);
   fsclient = fsclient ? NULL : c;
   arrange();
@@ -428,7 +417,7 @@ void on_xdg_surface_fullscreen(struct wl_listener *listener, void *data) {
 }
 
 void on_xdg_new_surface(struct wl_listener *listener, void *data) {
-  log("%s", "on_xdg_new_surface");
+  //log("%s", "on_xdg_new_surface");
   struct wlr_xdg_surface *s = data;
 
   if (s->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
@@ -560,7 +549,7 @@ void on_keyboard_modifiers(struct wl_listener *listener, void *data) {
 }
 
 void on_input_destroy(struct wl_listener *listener, void *data) {
-  log("%s", "on_input_destroy");
+  //log("%s", "on_input_destroy");
   struct wlr_input_device *device = data;
   Input *input = device->data;
   wl_list_remove(&input->modifiers.link);
@@ -571,7 +560,7 @@ void on_input_destroy(struct wl_listener *listener, void *data) {
 
 void on_backend_new_input(struct wl_listener *listener, void *data) {
   struct wlr_input_device *device = data;
-  log("on_backend_new_input: (%d): %s", device->type, device->name);
+  //log("on_backend_new_input: (%d): %s", device->type, device->name);
 
   if (device->type == WLR_INPUT_DEVICE_KEYBOARD) {
     struct xkb_context *context;
@@ -584,7 +573,7 @@ void on_backend_new_input(struct wl_listener *listener, void *data) {
     keymap = xkb_map_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
     wlr_keyboard_set_keymap(device->keyboard, keymap);
-    wlr_keyboard_set_repeat_info(device->keyboard, 25, 220);
+    wlr_keyboard_set_repeat_info(device->keyboard, 25, 350);
     xkb_keymap_unref(keymap);
     xkb_context_unref(context);
 
@@ -640,7 +629,7 @@ void on_cursor_motion(struct wl_listener *listener, void *data) {
 }
 
 void on_seat_request_set_cursor(struct wl_listener *listener, void *data) {
-  log("%s", "on_seat_request_cursor");
+  //log("%s", "on_seat_request_cursor");
   struct wlr_seat_pointer_request_set_cursor_event *e = data;
   if (e->seat_client == seat->pointer_state.focused_client) {
     wlr_cursor_set_surface(cursor, e->surface, e->hotspot_x, e->hotspot_y);
@@ -649,20 +638,20 @@ void on_seat_request_set_cursor(struct wl_listener *listener, void *data) {
 
 void on_seat_request_set_primary_selection(struct wl_listener *listener,
                                            void *data) {
-  log("%s", "on_seat_set_primary_selection");
+  //log("%s", "on_seat_set_primary_selection");
   struct wlr_seat_request_set_primary_selection_event *e = data;
   wlr_seat_set_primary_selection(seat, e->source, e->serial);
 }
 
 void on_seat_request_set_selection(struct wl_listener *listener, void *data) {
-  log("%s", "on_seat_request_set_selection");
+  //log("%s", "on_seat_request_set_selection");
   struct wlr_seat_request_set_selection_event *e = data;
   wlr_seat_set_selection(seat, e->source, e->serial);
 }
 
 void on_xwayland_surface_request_activate(struct wl_listener *listener,
                                           void *data) {
-  log("%s", "on_xwayland_surface_request_activate");
+  //log("%s", "on_xwayland_surface_request_activate");
   Client *c = wl_container_of(listener, c, activate);
   if (c->type == X11Managed) {
     wlr_xwayland_surface_activate(c->surface.xwayland, 1);
@@ -671,7 +660,7 @@ void on_xwayland_surface_request_activate(struct wl_listener *listener,
 
 void on_xwayland_surface_request_configure(struct wl_listener *listener,
                                            void *data) {
-  log("%s", "on_xwayland_surface_request_configure");
+  //log("%s", "on_xwayland_surface_request_configure");
   Client *c = wl_container_of(listener, c, configure);
   struct wlr_xwayland_surface_configure_event *e = data;
   wlr_xwayland_surface_configure(c->surface.xwayland, e->x, e->y, e->width,
@@ -679,7 +668,7 @@ void on_xwayland_surface_request_configure(struct wl_listener *listener,
 }
 
 void on_xwayland_new_surface(struct wl_listener *listener, void *data) {
-  log("%s", "on_xwayland_new_surface");
+  //log("%s", "on_xwayland_new_surface");
   struct wlr_xwayland_surface *xwayland_surface = data;
 
   Client *c = calloc(1, sizeof(Client));
@@ -699,7 +688,7 @@ void on_xwayland_new_surface(struct wl_listener *listener, void *data) {
 }
 
 void on_xwayland_ready(struct wl_listener *listener, void *data) {
-  log("%s", "on_xwayland_ready");
+  //log("%s", "on_xwayland_ready");
   xcb_connection_t *xc = xcb_connect(xwayland->display_name, NULL);
   if (xcb_connection_has_error(xc)) {
     return;
